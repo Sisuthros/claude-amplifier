@@ -22,6 +22,13 @@ import {
   handleDecisions,
   handleContextLoad,
   handleGlobalPatterns,
+  handleLinkDecisions,
+  // v1.4.0
+  handlePreflight,
+  handleRecordClaim,
+  handleVerifyClaim,
+  handlePromotePattern,
+  handleEvidenceChain,
 } from "./tools.js";
 import { bootstrap } from "./bootstrap.js";
 
@@ -73,6 +80,16 @@ const TOOLS = [
           items: { type: "string" },
           description: "Tags for filtering (optional).",
         },
+        trigger: {
+          type: "string",
+          description:
+            "The specific situation or action that triggers this lesson — useful for pattern detection (optional).",
+        },
+        pattern_key: {
+          type: "string",
+          description:
+            "v1.2.0 — explicit pattern grouping key (e.g. 'read-docs-before-coding'). When set, recording another lesson with the same key for this project bumps a frequency counter instead of creating a duplicate. Use this when the same lesson recurs with different wording each time. (optional)",
+        },
       },
       required: ["project", "title", "description"],
     },
@@ -86,9 +103,18 @@ const TOOLS = [
       properties: {
         op: {
           type: "string",
-          enum: ["track", "get", "search", "supersede", "revert"],
+          enum: [
+            "track",
+            "get",
+            "search",
+            "supersede",
+            "revert",
+            "update",
+            "update_outcome",
+            "overdue",
+          ],
           description:
-            "Operation: track=add new, get=list active, search=text search, supersede/revert=update status.",
+            "Operation: track=add new, get=list active, search=text search, supersede/revert=replace decision, update=refine fields without superseding (v1.2.0), update_outcome=mark validation, overdue=list decisions whose check-in passed.",
         },
         project: {
           type: "string",
@@ -122,7 +148,58 @@ const TOOLS = [
         },
         id: {
           type: "number",
-          description: "Decision id. Required for supersede/revert.",
+          description:
+            "Decision id. Required for supersede/revert/update/update_outcome.",
+        },
+        outcome_check_in: {
+          type: "string",
+          description:
+            "When to follow up on this decision. Relative ('+7d', '+30d') or ISO date. Surfaces in 'overdue' when past due.",
+        },
+        outcome_status: {
+          type: "string",
+          enum: ["pending", "validated", "failed"],
+          description:
+            "For op=update_outcome: mark whether the decision worked. Defaults to 'validated'.",
+        },
+        restore_step: {
+          type: "string",
+          description:
+            "How to restore this decision if the system gets reset (e.g. container recreate, image pull). Surfaces in active reminders every session.",
+        },
+        next_step: {
+          type: "string",
+          description: "Concrete next action when this decision is unblocked.",
+        },
+        blocked_on: {
+          type: "string",
+          description:
+            "What this decision is waiting on (person, event, dependency).",
+        },
+        trade_offs: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tradeoffs accepted when choosing this decision.",
+        },
+        alternatives_considered: {
+          type: "array",
+          items: { type: "string" },
+          description: "Alternatives considered and rejected.",
+        },
+        supersedes: {
+          type: "number",
+          description:
+            "ID of an older decision this one replaces. The old one is automatically marked 'superseded'.",
+        },
+        relations: {
+          type: "object",
+          properties: {
+            triggered_by: { type: "array", items: { type: "number" } },
+            caused: { type: "array", items: { type: "number" } },
+            relates_to: { type: "array", items: { type: "number" } },
+          },
+          description:
+            "Knowledge-graph links to other decision IDs by relation type.",
         },
       },
       required: ["op"],
@@ -159,6 +236,31 @@ const TOOLS = [
             "Which data types to load. Defaults to ['lessons','decisions','patterns']. Pass 'all' to include everything.",
         },
       },
+    },
+  },
+  {
+    name: "amplify_link_decisions",
+    description:
+      "v1.2.0 — Add a knowledge-graph link between two existing decisions. Lightweight: one call = one link. Idempotent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: {
+          type: "number",
+          description: "ID of the decision that holds the link.",
+        },
+        to: {
+          type: "number",
+          description: "ID of the decision being linked to.",
+        },
+        relation: {
+          type: "string",
+          enum: ["triggered_by", "caused", "relates_to"],
+          description:
+            "Relation type: triggered_by=this was caused by `to`; caused=this led to `to`; relates_to=loose association.",
+        },
+      },
+      required: ["from", "to", "relation"],
     },
   },
   {
@@ -199,13 +301,139 @@ const TOOLS = [
       required: ["op"],
     },
   },
+
+  // -----------------------------------------------------------------------
+  // v1.4.0 — Pattern Oracle + Verification Gate
+  // -----------------------------------------------------------------------
+  {
+    name: "amplify_preflight",
+    description:
+      "v1.4.0 — Before starting a task, check stored lessons + decisions for matching failure patterns. Returns risk_level (low/medium/high/critical), matched patterns and lessons, and suggested approach. Call this BEFORE diving in when working on something that touches a familiar area.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Project name." },
+        prompt: {
+          type: "string",
+          description:
+            "The task / prompt about to be executed (free text). The oracle scans for matching prior issues. Alias: 'task'.",
+        },
+        task: {
+          type: "string",
+          description: "Alias for 'prompt'. Either field is accepted.",
+        },
+        context: {
+          type: "string",
+          description:
+            "Optional extra context (file names, recent commits, etc.) that improves matching.",
+        },
+      },
+      required: ["project"],
+    },
+  },
+  {
+    name: "amplify_record_claim",
+    description:
+      "v1.4.0 — Record a lesson as an UNVERIFIED claim (default confidence 0.5). Use this for any 'I just learned X' moment that has not been confirmed by tests, commits, or user confirmation. Promote later with amplify_verify_claim. (amplify_learn remains for confirmed/legacy records.)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string" },
+        type: {
+          type: "string",
+          enum: ["mistake", "success", "insight", "warning"],
+        },
+        title: { type: "string" },
+        description: { type: "string" },
+        context: { type: "string" },
+        resolution: { type: "string" },
+        prevention: { type: "string" },
+        severity: {
+          type: "string",
+          enum: ["low", "medium", "high", "critical"],
+        },
+        tags: { type: "array", items: { type: "string" } },
+        trigger: { type: "string" },
+        pattern_key: {
+          type: "string",
+          description: "Explicit pattern grouping key for aggregation across worded variants.",
+        },
+        initial_confidence: {
+          type: "number",
+          minimum: 0,
+          maximum: 1,
+          description: "Override starting confidence (default 0.5).",
+        },
+      },
+      required: ["project", "title", "description"],
+    },
+  },
+  {
+    name: "amplify_verify_claim",
+    description:
+      "v1.4.0 — Attach evidence to a lesson to promote it. Promotion rules: (claim + 1 evidence) → 'evidence' (conf 0.7); (evidence + user_confirmation OR ≥2 distinct evidence types) → 'confirmed' (conf 1.0). Use this when tests pass, a commit lands, or the user explicitly confirms.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "Lesson id to verify." },
+        evidence_type: {
+          type: "string",
+          enum: [
+            "git_commit",
+            "test_run",
+            "user_confirmation",
+            "external_doc",
+            "manual_review",
+          ],
+        },
+        evidence_link: {
+          type: "string",
+          description: "Git SHA, test ID, URL, or short note — proof of the claim.",
+        },
+        promote_to: {
+          type: "string",
+          enum: ["evidence", "confirmed"],
+          description: "Optional override (default: follow auto-promotion rules).",
+        },
+      },
+      required: ["id", "evidence_type", "evidence_link"],
+    },
+  },
+  {
+    name: "amplify_promote_pattern",
+    description:
+      "v1.4.0 — Promote a pattern_key from per-project to global scope. Requires the key to exist in ≥2 projects with ≥1 confirmed lesson. After promotion the pattern weighs more in cross-project Pattern Oracle scoring.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pattern_key: {
+          type: "string",
+          description: "Pattern key to promote (must exist on ≥2 projects).",
+        },
+      },
+      required: ["pattern_key"],
+    },
+  },
+  {
+    name: "amplify_evidence_chain",
+    description:
+      "v1.4.0 — Show the evidence chain that supports a stored lesson or decision. Useful for auditing why Amplifier 'knows' something — surfaces commits, test runs, and user confirmations that promoted a claim to confirmed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "number" },
+        kind: { type: "string", enum: ["lesson", "decision"], default: "lesson" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
 // Server setup
 // ---------------------------------------------------------------------------
 
-async function main() {
+async function runMcpServer(): Promise<void> {
   const store = new SQLiteStore();
 
   // Print bootstrap summary to stderr (visible in MCP server logs, not sent to Claude)
@@ -213,7 +441,7 @@ async function main() {
   process.stderr.write(summary + "\n");
 
   const server = new Server(
-    { name: "claude-amplifier", version: "1.0.0" },
+    { name: "claude-amplifier", version: "1.4.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -242,6 +470,25 @@ async function main() {
         case "amplify_global_patterns":
           text = await handleGlobalPatterns(store, args as Record<string, unknown>);
           break;
+        case "amplify_link_decisions":
+          text = await handleLinkDecisions(store, args as Record<string, unknown>);
+          break;
+        // v1.4.0
+        case "amplify_preflight":
+          text = await handlePreflight(store, args as Record<string, unknown>);
+          break;
+        case "amplify_record_claim":
+          text = await handleRecordClaim(store, args as Record<string, unknown>);
+          break;
+        case "amplify_verify_claim":
+          text = await handleVerifyClaim(store, args as Record<string, unknown>);
+          break;
+        case "amplify_promote_pattern":
+          text = await handlePromotePattern(store, args as Record<string, unknown>);
+          break;
+        case "amplify_evidence_chain":
+          text = await handleEvidenceChain(store, args as Record<string, unknown>);
+          break;
         default:
           text = `Error: unknown tool '${name}'.`;
       }
@@ -257,6 +504,31 @@ async function main() {
   // Start transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+// ---------------------------------------------------------------------------
+// Entry point — route to CLI subcommands or the MCP stdio server.
+// `claude-amplifier`           → MCP server (default, what Claude Desktop/Code call)
+// `claude-amplifier mcp`       → MCP server (explicit)
+// `claude-amplifier init|seed|list|stats|export|import|doctor|help` → CLI
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const first = args[0];
+
+  // No args or explicit "mcp" → run the MCP server.
+  if (!first || first === "mcp") {
+    await runMcpServer();
+    return;
+  }
+
+  // Anything else is a CLI subcommand. Dynamic import keeps the MCP path
+  // free of CLI-only deps and avoids pulling in chalk-style colour code paths
+  // when Claude Desktop spawns us as a subprocess.
+  const { runCli } = await import("./cli.js");
+  const code = await runCli(args);
+  process.exit(code);
 }
 
 main().catch((err) => {

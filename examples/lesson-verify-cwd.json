@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "warning",
+  "title": "Verify working directory before destructive shell commands",
+  "description": "Ran a recursive delete in what I thought was a scratch directory; it was the project root. Lost an hour of uncommitted work.",
+  "context": "Shell sessions span multiple projects; `cd` history is invisible after a context switch.",
+  "resolution": "Restored from git; the unstaged files were gone.",
+  "prevention": "Before any `rm -rf`, `git reset --hard`, `git clean -fd`, `find -delete`, or similar: print `pwd` and `ls` and confirm the target. If the action is irreversible and affects more than one file, ask before running.",
+  "severity": "high",
+  "tags": ["safety", "shell", "destructive"],
+  "trigger": "About to run a recursive or force-delete shell command",
+  "pattern_key": "verify-cwd-before-destructive-shell"
+}

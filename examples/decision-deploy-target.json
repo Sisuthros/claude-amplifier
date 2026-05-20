@@ -1,0 +1,21 @@
+{
+  "op": "track",
+  "project": "REPLACE_ME",
+  "category": "infrastructure",
+  "title": "Docker Compose on a single VPS for production",
+  "description": "Production runs as a Docker Compose stack on one dedicated VPS (4 vCPU / 16GB / 200GB SSD). Backups to an S3-compatible bucket nightly. No orchestrator until we have a second machine in the mix.",
+  "rationale": "We have one product, one team, and traffic that fits comfortably on one machine. A managed Kubernetes cluster would multiply our ops surface area without buying us anything we need this quarter.",
+  "tags": ["deployment", "docker", "vps"],
+  "trade_offs": [
+    "Single-host outage = full outage; downtime budget assumes this",
+    "Vertical scaling only until we move to multi-host",
+    "Manual failover; no autoscaling"
+  ],
+  "alternatives_considered": [
+    "Kubernetes (managed) — rejected: operational overhead too high for current scale",
+    "Serverless / Lambda — rejected: workload includes long-running websockets and background workers",
+    "Heroku / Render — rejected: cost at our load profile, vendor lock-in"
+  ],
+  "outcome_check_in": "+180d",
+  "restore_step": "If the VPS dies: provision a fresh box from the same provider, restore the latest S3 backup, run `docker compose up -d`. RTO ~30 min."
+}

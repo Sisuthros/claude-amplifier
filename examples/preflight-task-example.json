@@ -1,0 +1,50 @@
+{
+  "_comment": "Sample input + expected output for amplify_preflight. Call this BEFORE Claude touches the system. The risk level and matched patterns let Claude (or you) decide whether to proceed, abort, or read more docs first.",
+
+  "input": {
+    "tool": "amplify_preflight",
+    "args": {
+      "project": "REPLACE_ME",
+      "task": "Configure ZeptoClaw heartbeat to use a new model",
+      "context": "Photon is rate-limited on the current heartbeat model; need to pick a replacement that won't crash the daemon."
+    }
+  },
+
+  "expected_response_shape": {
+    "risk_level": "high",
+    "score": 4.2,
+    "evidence_quality": "strong",
+    "matched_patterns": [
+      {
+        "pattern_key": "no-mickey-mouse-heartbeat",
+        "title": "Heartbeat needs TPM ≥ 30k and ≥40k context",
+        "verification_status": "confirmed",
+        "frequency": 3,
+        "projects": ["chimera-prime", "zeptoclaw-fork"],
+        "score_contribution": 2.1
+      },
+      {
+        "pattern_key": "avoid-openai-prefix-on-zeptoclaw",
+        "title": "Don't use openai/ substring on ZeptoClaw",
+        "verification_status": "confirmed",
+        "frequency": 5,
+        "projects": ["chimera-prime", "zeptoclaw-fork"],
+        "score_contribution": 1.4
+      }
+    ],
+    "matched_decisions": [
+      {
+        "id": 38,
+        "title": "Photon heartbeat: groq/groq/compound primary",
+        "status": "active",
+        "score_contribution": 0.7
+      }
+    ],
+    "suggested_approach": "Read tools/heartbeat-cron.mjs for the current model fallback chain. Verify any candidate against TPM and context-window requirements documented in family-architecture-BEDROCK.md. Avoid model names containing 'openai/' substring.",
+    "thresholds_applied": {
+      "medium": 1.0,
+      "high": 3.0,
+      "critical": 6.0
+    }
+  }
+}

@@ -1,44 +1,61 @@
 {
   "name": "claude-amplifier",
-  "version": "1.0.0",
-  "description": "Persistent memory for Claude across sessions via MCP",
+  "version": "1.4.0",
+  "description": "Persistent memory + decision tracking for Claude across sessions, via MCP. Stops Claude from re-explaining the same architectural choices every session.",
   "keywords": [
     "claude",
+    "claude-code",
+    "claude-desktop",
     "mcp",
     "model-context-protocol",
     "memory",
-    "ai",
+    "persistent-memory",
+    "knowledge-graph",
+    "ai-agent",
     "anthropic",
-    "sqlite"
+    "sqlite",
+    "decision-log",
+    "lesson-learned"
   ],
   "license": "MIT",
-  "author": "",
+  "author": "Sisuthros",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/claude-amplifier"
+    "url": "git+https://github.com/Sisuthros/claude-amplifier.git"
   },
+  "bugs": {
+    "url": "https://github.com/Sisuthros/claude-amplifier/issues"
+  },
+  "homepage": "https://github.com/Sisuthros/claude-amplifier#readme",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
     "claude-amplifier": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node --experimental-sqlite dist/index.js",
-    "prepublishOnly": "npm run build"
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test tests/*.test.js",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^12.9.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=18.0.0"
   }
 }

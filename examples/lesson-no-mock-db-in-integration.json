@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "mistake",
+  "title": "Integration tests must hit a real database, not mocks",
+  "description": "Mocked the database in integration tests. The mocks passed cleanly; the production migration broke under real Postgres constraints. The bug had been catchable by a single real-DB test for weeks.",
+  "context": "Adding a NOT NULL column with a backfill default; mocks didn't enforce constraint ordering the way Postgres does.",
+  "resolution": "Rewrote the suite against a containerized Postgres; the failing case surfaced immediately.",
+  "prevention": "Integration tests use a real database (containerized is fine). Unit tests can mock; integration tests cannot. If a test name contains the word 'integration', it must touch real infrastructure.",
+  "severity": "high",
+  "tags": ["testing", "database", "mocks"],
+  "trigger": "Writing or reviewing a test labelled 'integration' that imports a mocking library",
+  "pattern_key": "no-mocks-in-integration-tests"
+}

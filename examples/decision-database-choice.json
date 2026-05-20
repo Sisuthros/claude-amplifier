@@ -1,0 +1,21 @@
+{
+  "op": "track",
+  "project": "REPLACE_ME",
+  "category": "architecture",
+  "title": "Postgres as primary datastore",
+  "description": "All production data lives in a single Postgres instance. Application services connect over a connection pool. No application-level sharding until we cross 100GB or 10k qps, whichever comes first.",
+  "rationale": "Postgres covers our needs (transactions, JSON, full-text, geo, time-series via extensions) without operational sprawl. We are a small team; one database to operate and back up is the right call until proven otherwise.",
+  "tags": ["database", "postgres", "core-architecture"],
+  "trade_offs": [
+    "Single point of failure until we add a replica",
+    "No automatic horizontal scaling — re-evaluating becomes a project, not a knob",
+    "Some workloads (high-write event streams) will need additional infrastructure later"
+  ],
+  "alternatives_considered": [
+    "MongoDB — rejected: we want strong consistency and SQL joins",
+    "MySQL — rejected: Postgres extension ecosystem and JSON support are stronger for our use cases",
+    "DynamoDB — rejected: vendor lock-in, weak local-dev story, lacks SQL"
+  ],
+  "outcome_check_in": "+90d",
+  "next_step": "Stand up a hot replica before the 90-day check-in"
+}

@@ -1,0 +1,48 @@
+{
+  "_comment": "Full pattern-promotion flow for the ZeptoClaw 'openai/' prefix parsing bug. This pattern was confirmed in two separate projects (chimera-prime and zeptoclaw-fork) before being promoted to a cross-project global pattern.",
+
+  "step_0_prereq_lessons_already_exist": [
+    {
+      "id": 42,
+      "project": "chimera-prime",
+      "pattern_key": "avoid-openai-prefix-on-zeptoclaw",
+      "verification_status": "confirmed",
+      "title": "ZeptoClaw 0.9.2 misroutes 'openai/' prefixed model names",
+      "frequency": 3
+    },
+    {
+      "id": 71,
+      "project": "zeptoclaw-fork",
+      "pattern_key": "avoid-openai-prefix-on-zeptoclaw",
+      "verification_status": "confirmed",
+      "title": "Same openai-substring routing bug, manifested 9h downtime",
+      "frequency": 2
+    }
+  ],
+
+  "step_1_check_pattern_stats": {
+    "tool": "amplify_preflight",
+    "args": {
+      "project": "any-project",
+      "task": "Configure ZeptoClaw model with openai prefix"
+    },
+    "_note": "Will return high/critical risk because both lessons are confirmed in distinct projects."
+  },
+
+  "step_2_promote_to_global": {
+    "tool": "amplify_promote_pattern",
+    "args": {
+      "pattern_key": "avoid-openai-prefix-on-zeptoclaw",
+      "title": "Avoid 'openai/' prefix in ZeptoClaw model names",
+      "description": "ZeptoClaw 0.9.2 runtime parses 'openai/' substring as openai provider, but startup code routes it as nvidia. Result: Invalid API Key on every heartbeat. Confirmed in chimera-prime and zeptoclaw-fork — pattern is generalisable.",
+      "example": "Bad:  nvidia/openai/gpt-oss-120b\nGood: nvidia/gpt-oss-120b  OR  moonshotai/kimi-k2.6",
+      "tags": ["zeptoclaw", "config", "model-routing"]
+    },
+    "returns": {
+      "pattern_key": "avoid-openai-prefix-on-zeptoclaw",
+      "projects_covered": ["chimera-prime", "zeptoclaw-fork"],
+      "total_frequency": 5,
+      "promoted_at": "2026-05-21T03:14:00Z"
+    }
+  }
+}

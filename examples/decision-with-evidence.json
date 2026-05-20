@@ -1,0 +1,41 @@
+{
+  "_comment": "Decision recorded with verification_status=evidence and a follow-up confirmation. Two MCP calls: track, then verify with user_confirmation.",
+
+  "step_1_track_decision_as_evidence": {
+    "tool": "amplify_decisions",
+    "args": {
+      "op": "track",
+      "project": "REPLACE_ME",
+      "category": "architecture",
+      "title": "Switch image hosting to S3",
+      "description": "Migrate all user-uploaded images from local disk to S3.",
+      "rationale": "Cheaper at scale, CDN-ready, removes single-host failure mode for uploads.",
+      "trade_offs": ["Lose local-only debugging", "Adds AWS bill ~€30/mo"],
+      "alternatives_considered": ["Cloudflare R2", "Self-hosted MinIO"],
+      "outcome_check_in": "+30d",
+      "restore_step": "terraform apply in infra/s3-images/ — secrets in Vault",
+      "tags": ["storage", "infra"],
+      "verification_status": "evidence",
+      "confidence": 0.7,
+      "evidence_links": [
+        {
+          "evidence_type": "build_passed",
+          "evidence_link": "https://github.com/REPLACE_ME/repo/actions/runs/98765",
+          "notes": "Staging deploy green, latency p95 dropped 40%"
+        }
+      ]
+    }
+  },
+
+  "step_2_confirm_after_production": {
+    "tool": "amplify_verify_claim",
+    "args": {
+      "id": "DECISION_ID_FROM_STEP_1",
+      "kind": "decision",
+      "evidence_type": "production_metric",
+      "evidence_link": "https://grafana.internal/d/upload-latency",
+      "notes": "30-day check-in: production p95 stable at 110ms, no upload failures, $28/mo actual cost"
+    },
+    "returns": { "verification_status": "confirmed", "confidence": 1.0 }
+  }
+}

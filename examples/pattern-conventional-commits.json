@@ -1,0 +1,8 @@
+{
+  "op": "add",
+  "title": "Conventional Commits for all commits",
+  "description": "Every commit message starts with a type prefix: feat / fix / docs / refactor / test / chore / build / ci. Subject line is imperative, present tense, max 72 chars. Body explains why, not what.",
+  "example": "feat(auth): support passkey login on macOS Safari\n\nThe webauthn library upgraded to support the\nplatform-authenticator API. Wire it into the existing\nlogin flow so Safari users can register a passkey from\nthe profile screen.",
+  "tags": ["git", "commits", "convention"],
+  "applies_to": "all"
+}

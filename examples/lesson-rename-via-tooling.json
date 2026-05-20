@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "insight",
+  "title": "Use the language server for renames, not find/replace",
+  "description": "Did a project-wide find/replace to rename a function. It silently renamed an unrelated string in a markdown file and a comment in a test, neither of which I wanted touched.",
+  "context": "Refactoring an exported function name across a TypeScript / Python / Go codebase.",
+  "resolution": "Reverted, used the editor's 'Rename Symbol' (F2 in VS Code) which only touched bindings.",
+  "prevention": "For renaming identifiers (functions, classes, variables, types): use the language server's rename action. Reserve plain find/replace for non-identifier text (strings, comments, docs).",
+  "severity": "medium",
+  "tags": ["refactoring", "tooling", "lsp"],
+  "trigger": "About to do a find/replace whose pattern matches an identifier name",
+  "pattern_key": "rename-via-language-server"
+}

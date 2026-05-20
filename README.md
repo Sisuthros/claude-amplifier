@@ -1,64 +1,232 @@
 # Claude Amplifier
 
-**Persistent memory for Claude across sessions — via MCP.**
+[![npm version](https://img.shields.io/npm/v/claude-amplifier.svg)](https://www.npmjs.com/package/claude-amplifier)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/node/v/claude-amplifier.svg)](https://www.npmjs.com/package/claude-amplifier)
+[![MCP](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io)
 
-Claude forgets everything when a conversation ends. Claude Amplifier fixes that. It's an [MCP server](https://modelcontextprotocol.io/) that gives Claude a persistent SQLite memory store for decisions, lessons, and patterns — so it remembers your preferences, past mistakes, and architectural choices every time you start a new session.
+> Stop re-explaining the same architectural decisions to Claude every single session.
 
----
-
-## The Problem
-
-Every time you start a new Claude session you re-explain:
-
-- "We decided to use Postgres, not MongoDB, because..."
-- "Don't use that library — we had a circular dependency issue last month."
-- "Our API follows resource/action naming, not CRUD verbs."
-
-With Claude Amplifier, Claude already knows these things.
+Claude is brilliant inside one conversation and **shockingly oblivious** across sessions. Claude Amplifier is an [MCP](https://modelcontextprotocol.io) server that gives Claude persistent memory in a local SQLite database — decisions you've made, lessons you've learned, patterns you keep tripping over — so the next session starts where the last one left off.
 
 ---
 
-## Requirements
+## The problem
 
-- **Node.js >= 22.5** (uses the built-in `node:sqlite` module — no native compilation)
-- No other runtime dependencies
+These are real moments. They happen to everyone who uses Claude regularly:
 
-## Install
+> 💤 **Claude told me to *"get some sleep"* — at 6 PM.** I had just come home from work. The previous session had run from 02:00 to 06:00 and Claude assumed the conversation was continuous.
+
+> 🗃️ **Claude keeps suggesting MongoDB.** We switched to Postgres three months ago. I've explained why four times this week.
+
+> 🪓 **Claude `rm -rf`'d a directory it thought was in `/tmp`.** It was the project root. The pwd had changed two prompts earlier.
+
+> 🪞 **The same bug keeps re-appearing in code review.** Three different sessions, three nearly-identical mistakes. Claude has no memory that any of them happened.
+
+> 🌀 **Claude wrote down a "lesson" that wasn't true.** It guessed a config key was wrong, the build still failed for an unrelated reason, and now that guess is in memory — feeding back into every future session as if it were verified. ([#27430](https://github.com/anthropics/claude-code/issues/27430))
+
+Claude Amplifier doesn't fix Claude. It gives Claude a **place to remember** so you don't have to be the memory — and as of **v1.4.0**, a **Pattern Oracle** that warns Claude *before* it walks into a known landmine, plus **Verification-Gated Memory** that distinguishes between *claimed*, *evidenced*, and *confirmed* lessons so guesses can't quietly poison future advice.
+
+---
+
+## What it actually does
+
+```
+   ┌─────────────────────────────────────────────────────────┐
+   │  Session 1 — Monday morning                             │
+   │  > Claude tries to mock the DB in an integration test   │
+   │  You: "no, mock divergence burned us last quarter"      │
+   │  → amplify_learn({ title: "Don't mock the DB", ... })   │
+   └─────────────────────────────────────────────────────────┘
+                            ↓
+              [ SQLite DB in ~/.claude-amplifier/ ]
+                            ↓
+   ┌─────────────────────────────────────────────────────────┐
+   │  Session 2 — Friday afternoon                           │
+   │  > amplify_context_load({ project: "my-api" })          │
+   │  Claude already knows: integration tests use real DB.   │
+   │  No re-explanation needed.                              │
+   └─────────────────────────────────────────────────────────┘
+```
+
+Ten MCP tools, five SQLite tables, zero cloud — your memory stays on your disk.
+
+### New in v1.4.0 — Pattern Oracle + Verification-Gated Memory
+
+```
+   ┌─────────────────────────────────────────────────────────┐
+   │  Before Claude starts a task                            │
+   │  > amplify_preflight({ task: "Configure NIM endpoint" })│
+   │  ⚠️  HIGH RISK (score 4.2)                              │
+   │  Matched patterns:                                      │
+   │    • "ZeptoClaw model name 'openai/' parsing bug"       │
+   │      (seen 3× across 2 projects, CONFIRMED)             │
+   │  Evidence quality: STRONG                               │
+   │  Suggested approach: Read docs first, avoid openai/*    │
+   └─────────────────────────────────────────────────────────┘
+                            ↓
+   ┌─────────────────────────────────────────────────────────┐
+   │  When Claude records a lesson it just inferred          │
+   │  > amplify_record_claim({ ... })          status: claim │
+   │                                                         │
+   │  Later, after the build passes:                         │
+   │  > amplify_verify_claim({ id: 17,                       │
+   │      evidence_type: "build_passed", ... })              │
+   │                                              → evidence │
+   │  Then you confirm:                                      │
+   │  > amplify_verify_claim({ id: 17,                       │
+   │      evidence_type: "user_confirmation" })              │
+   │                                             → confirmed │
+   └─────────────────────────────────────────────────────────┘
+```
+
+The Oracle weights matches by status: a `confirmed` lesson at score 1.0 counts five times as much as a raw `claim` at 0.2, so unverified guesses can't drown out hard-won truth.
+
+---
+
+## Quick start
 
 ```bash
+# 1. Install
 npm install -g claude-amplifier
+
+# 2. Auto-detect Claude Desktop / Claude Code and wire it up
+claude-amplifier init
+
+# 3. Plant the recommended starter lessons (see "Recommended starter lessons" below)
+claude-amplifier seed
+
+# 4. Restart Claude. That's it.
 ```
 
-Or run directly with npx (no install):
+Then add this single line to your `CLAUDE.md` so Claude calls it at the start of every session:
 
-```bash
-npx claude-amplifier
+```
+At the START of every session: amplify_context_load({ project: "<your-project>", types: ["all"] })
 ```
 
 ---
 
-## Add to Claude Desktop
+## How does this compare to other Claude memory MCPs?
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+| Feature                                | `@modelcontextprotocol/server-memory` (official) | Claude Amplifier               |
+| -------------------------------------- | :----------------------------------------------: | :----------------------------: |
+| Persistent storage                     | ✅ (knowledge graph)                              | ✅ (SQLite)                     |
+| Decisions with rationale + alternatives| ❌                                                | ✅                              |
+| Lessons with `type` (mistake/insight)  | ❌                                                | ✅                              |
+| Recurrence tracking (`frequency` ×N)   | ❌                                                | ✅                              |
+| Pattern grouping (`pattern_key`)       | ❌                                                | ✅ (v1.2.0)                     |
+| Lifecycle: outcome check-ins / blocks  | ❌                                                | ✅ (v1.1.0)                     |
+| Knowledge graph (`triggered_by`, etc.) | ✅ (entities + relations)                         | ✅ (decision-level)             |
+| Preflight risk warnings                | ❌                                                | ✅ Pattern Oracle (v1.4.0)      |
+| Verification-gated memory              | ❌                                                | ✅ claim/evidence/confirmed (v1.4.0) |
+| Cross-project pattern promotion        | ❌                                                | ✅ (v1.4.0)                     |
+| CLI for setup / inspection / backup    | ❌                                                | ✅ `init / seed / list / stats` |
+| Starter content out-of-the-box         | ❌                                                | ✅ `claude-amplifier seed`      |
+
+The official server is great if you just want **"remember entities and how they relate."** Claude Amplifier is for when you want **"remember *why* we decided this, *what* keeps going wrong, and *when* I scheduled a follow-up."**
+
+---
+
+## Your first 5 minutes
+
+After `init` + `seed`, try this:
+
+1. Open a fresh Claude session in a project where Claude Amplifier is configured.
+2. Tell Claude something architectural:
+
+   > "We use Postgres for transactional data and ClickHouse for analytics. Don't ever suggest one for the other."
+
+3. Watch Claude call `amplify_decisions`:
+
+   ```json
+   amplify_decisions({
+     op: "track",
+     project: "my-project",
+     category: "architecture",
+     title: "Postgres for tx, ClickHouse for analytics",
+     description: "...",
+     rationale: "..."
+   })
+   ```
+
+4. Close the session. Open a new one tomorrow. First thing Claude does (per your `CLAUDE.md`):
+
+   ```
+   amplify_context_load({ project: "my-project", types: ["all"] })
+   ```
+
+5. Now ask: *"Should we put the order events in MongoDB?"*
+
+   Claude already knows the answer — and **why**.
+
+Run `claude-amplifier list my-project` from your terminal at any time to see exactly what Claude is remembering.
+
+---
+
+## Recommended starter lessons
+
+The `claude-amplifier seed` command plants three battle-tested insights that cover ~80% of *"why is Claude doing this?"* moments. Each one is recorded with a `pattern_key` so future occurrences bump a counter instead of duplicating.
+
+### 1. Check the clock at session start
+
+> *True story: Claude told one of our testers to "go get some sleep" — at 6 PM. They had just come home from work. Claude assumed the conversation was a continuation of the previous night's marathon at 06:00. Without knowing what time it is, an AI happily talks past you for hours.*
+
+This one teaches Claude to run `date` as the first bash call of every session and flag big gaps before continuing the work.
+
+### 2. Verify cwd before running anything destructive
+
+`pwd` before `rm`. `pwd` before `git reset`. `pwd` before `docker compose down`. Two seconds of typing has saved real repos.
+
+### 3. Read the docs before guessing config keys
+
+Strict-validation tools crash. Permissive ones silently misconfigure. The fix in both cases is the same: read the docs *before* writing the key, not after the deploy fails.
+
+Run `claude-amplifier seed` to install all three. Custom seeds? See [`examples/`](./examples/).
+
+---
+
+## CLI commands
+
+```bash
+claude-amplifier init             # Auto-wire Claude Desktop / Claude Code
+claude-amplifier seed             # Plant the starter lessons
+claude-amplifier list [project]   # Show what Claude remembers
+claude-amplifier stats            # Storage totals + recurring patterns
+claude-amplifier export <project> # JSON backup for one project
+claude-amplifier import <file>    # Restore from a JSON backup
+claude-amplifier doctor           # Diagnose your setup
+claude-amplifier mcp              # Run the MCP server (default when no args)
+claude-amplifier help             # All of the above, with examples
+```
+
+The CLI is opt-in — Claude Desktop and Claude Code only ever call the MCP server. Use the CLI when you want to **see what's in there** or **back it up before something risky**.
+
+---
+
+## Manual configuration (if `init` doesn't fit your setup)
+
+### Claude Desktop
 
 ```json
+// macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
+// Windows: %APPDATA%\Claude\claude_desktop_config.json
+// Linux:   ~/.config/Claude/claude_desktop_config.json
+
 {
   "mcpServers": {
     "claude-amplifier": {
       "command": "claude-amplifier",
-      "env": {
-        "CLAUDE_AMPLIFIER_PROJECT": "/path/to/your/project"
-      }
+      "args": ["mcp"],
+      "env": { "CLAUDE_AMPLIFIER_PROJECT": "my-project" }
     }
   }
 }
 ```
 
-Restart Claude Desktop. You'll see the amplifier tools available in the tool picker.
+### Claude Code
 
-### Add to Claude Code (CLI)
-
-In your project directory, add to `.mcp.json`:
+Put `.mcp.json` in your project root:
 
 ```json
 {
@@ -66,71 +234,92 @@ In your project directory, add to `.mcp.json`:
     "claude-amplifier": {
       "type": "stdio",
       "command": "claude-amplifier",
-      "env": {
-        "CLAUDE_AMPLIFIER_PROJECT": "${workspaceFolder}"
-      }
+      "args": ["mcp"]
     }
   }
 }
 ```
 
----
-
-## Quick Start
-
-Once connected, add this to your CLAUDE.md (or system prompt):
-
-```
-At the START of every session, call amplify_context_load with the project name
-to load relevant decisions and lessons.
-
-At the END of every session (or when something important is decided), call
-amplify_learn or amplify_decisions to persist it.
-```
-
-That's it. Claude will now remember what matters.
+If `CLAUDE_AMPLIFIER_PROJECT` is not set, the project name is inferred from the current working directory's basename.
 
 ---
 
-## Tools
+## MCP tools (reference)
+
+### `amplify_context_load` — warm up Claude's memory
+
+Call this at the start of every session.
+
+```js
+amplify_context_load({ project: "my-api", types: ["all"] })
+// or load specific types
+amplify_context_load({ project: "my-api", types: ["decisions", "lessons"] })
+// or pass a path — project name is inferred from the basename
+amplify_context_load({ project_path: "/home/user/code/my-api" })
+```
+
+**`types` options:** `lessons` | `decisions` | `patterns` | `bootstrap` | `all`
+
+The response also surfaces two lifecycle sections automatically:
+
+- **⏰ Overdue outcome check-ins** — decisions you scheduled a follow-up for that have passed their date.
+- **🔧 Restore steps for active decisions** — concrete recovery actions if the system was reset.
 
 ### `amplify_learn` — record a lesson
 
-Capture a mistake, success, or insight so Claude remembers it next session.
-
-```
+```js
 amplify_learn({
   project: "my-api",
-  type: "mistake",           // mistake | success | insight | warning
+  type: "mistake",                    // mistake | success | insight | warning
   title: "Never use floats for currency",
-  description: "Rounding errors in checkout caused €0.01 discrepancies at scale.",
+  description: "Rounding errors caused €0.01 discrepancies at scale.",
   resolution: "Switched to integer cents everywhere.",
-  prevention: "Always store money as integer (cents/pence). Never float.",
-  severity: "high",          // low | medium | high | critical
-  tags: ["money", "types"]
+  prevention: "Always store money as integers (cents). Never float.",
+  severity: "high",                   // low | medium | high | critical
+  tags: ["money", "types"],
+  trigger: "when storing monetary values in any database column",
 })
 ```
 
-**Parameters:**
+#### Recurrence tracking
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `project` | Yes | Project name |
-| `title` | Yes | Short descriptive title |
-| `description` | Yes | What happened and why it matters |
-| `type` | No | `mistake` / `success` / `insight` / `warning` (default: `insight`) |
-| `severity` | No | `low` / `medium` / `high` / `critical` (default: `medium`) |
-| `context` | No | Surrounding circumstances |
-| `resolution` | No | How it was fixed |
-| `prevention` | No | How to avoid it next time |
-| `tags` | No | Array of strings for filtering |
+If you record the same lesson twice (same `project + title + type`), Claude Amplifier **bumps a `frequency` counter** instead of creating a duplicate. Seeing *"(seen 3×)"* next to a lesson is a strong signal to fix the root cause.
 
----
+#### `pattern_key` — fuzzy pattern grouping (v1.2.0)
+
+Recurring patterns rarely surface with identical wording. *"Read NIM docs first,"* *"Check Hermes API spec,"* and *"Look at ZeptoClaw config docs"* are three separate lessons, but they're all the same underlying pattern. Setting `pattern_key` makes Claude Amplifier treat them as one:
+
+```js
+amplify_learn({
+  project: "my-api",
+  type: "mistake",
+  title: "Read NIM docs first",
+  description: "...",
+  pattern_key: "read-docs-before-coding",  // ← same key for all variants
+  severity: "high",
+})
+```
+
+Future lessons with the same `pattern_key` in the same project bump the existing frequency, regardless of title wording.
+
+| Field         | Required | Notes                                                       |
+| ------------- | :------: | ----------------------------------------------------------- |
+| `project`     | ✓        | Project name                                                |
+| `title`       | ✓        | Short descriptive title                                     |
+| `description` | ✓        | What happened and why it matters                            |
+| `type`        | —        | Default: `insight`                                          |
+| `severity`    | —        | Default: `medium`                                           |
+| `context`     | —        | Surrounding circumstances                                   |
+| `resolution`  | —        | How it was fixed                                            |
+| `prevention`  | —        | How to avoid it next time                                   |
+| `tags`        | —        | String array for filtering                                  |
+| `trigger`     | —        | What state causes this pattern to surface                   |
+| `pattern_key` | —        | Explicit pattern grouping for fuzzy recurrence (v1.2.0)     |
 
 ### `amplify_decisions` — track architectural decisions
 
-```
-// Record a decision
+```js
+// Record
 amplify_decisions({
   op: "track",
   project: "my-api",
@@ -138,70 +327,251 @@ amplify_decisions({
   title: "Use event sourcing for the order domain",
   description: "All order state changes stored as immutable events.",
   rationale: "Audit trail required by compliance. Also enables replay for debugging.",
-  tags: ["orders", "eventsourcing"]
+  tags: ["orders", "eventsourcing"],
 })
 
-// List active decisions for a project
+// List active
 amplify_decisions({ op: "get", project: "my-api" })
 
-// Search decisions
+// Search
 amplify_decisions({ op: "search", query: "database", project: "my-api" })
 
-// Mark a decision as superseded
+// Replace when things change
 amplify_decisions({ op: "supersede", id: 3 })
 ```
 
-**Operations:** `track` | `get` | `search` | `supersede` | `revert`
+**Operations:** `track | get | search | supersede | revert | update | update_outcome | overdue`
 
----
+#### `op: "update"` — refine without superseding (v1.2.0)
 
-### `amplify_context_load` — load context at session start
+`supersede` is for replacing a decision with a *different* choice (Postgres → CockroachDB). When you just want to add a follow-up step, mark an outcome, or fix a typo, use `update`:
 
-Call this at the beginning of every session to warm Claude's memory.
-
+```js
+amplify_decisions({
+  op: "update",
+  id: 42,
+  next_step: "Now blocked on AWS organization approval",
+  blocked_on: "Platform team to enable cross-account replication",
+  outcome_check_in: "+14d",
+})
 ```
-amplify_context_load({
+
+This avoids 5-link supersede chains when the underlying choice never changed.
+
+#### Lifecycle metadata (v1.1.0)
+
+```js
+amplify_decisions({
+  op: "track",
   project: "my-api",
-  types: ["lessons", "decisions", "patterns"]
-})
+  title: "Switch image hosting to S3",
+  description: "...",
+  rationale: "Cheaper at scale, CDN-ready.",
 
-// Or pass a path — project name is inferred from the final directory
-amplify_context_load({
-  project_path: "/home/user/code/my-api"
+  outcome_check_in: "+30d",        // surfaces in context_load when due
+  restore_step: "terraform apply in infra/s3-images/ — secrets in Vault",
+  next_step: "Migrate the last 10% of legacy URLs",
+  blocked_on: "AWS Org admin must enable cross-account replication",
+  trade_offs: ["Lose local-only debugging", "Adds AWS bill ~€30/mo"],
+  alternatives_considered: ["Cloudflare R2", "Self-hosted MinIO"],
+  supersedes: 7,
+  relations: {
+    triggered_by: [3],
+    caused: [],
+    relates_to: [12],
+  },
 })
-
-// Load everything
-amplify_context_load({ project: "my-api", types: "all" })
 ```
 
-**`types` options:** `lessons` | `decisions` | `patterns` | `bootstrap` | `all`
+#### `amplify_link_decisions` — knowledge graph links (v1.2.0)
 
----
+```js
+amplify_link_decisions({ from: 42, to: 38, relation: "triggered_by" })
+```
 
-### `amplify_global_patterns` — cross-project patterns
+Relations: `triggered_by` (`from` was caused by `to`), `caused` (`from` led to `to`), `relates_to` (loose association). Idempotent.
 
-Patterns that apply to all your projects — conventions, non-negotiable rules, workflow preferences.
+### `amplify_preflight` — risk check before a task (v1.4.0)
+
+Run this *before* Claude touches anything you'd rather not break. The Oracle scans your stored lessons and active decisions for matches on the task description, then returns a risk level and the patterns it matched.
+
+```js
+amplify_preflight({
+  project: "my-api",
+  task: "Configure NIM endpoint with new model name",
+  context: "Photon ZeptoClaw setup",
+})
+```
+
+Response shape:
 
 ```
-// Add a global pattern
+⚠️  HIGH RISK (score 4.20)
+Evidence quality: STRONG
+
+Matched patterns (3):
+  • [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+    seen 3× across 2 projects, severity: critical
+  • [confirmed] Read NIM /v1/models before configuring fallback chains
+    seen 5× across 3 projects, severity: high
+  • [evidence] Heartbeat models need TPM ≥ 30k
+    seen 2×, severity: high
+
+Active decisions referenced (1):
+  • Photon primary: gpt-oss-120b NIM (no openai/ prefix)
+
+Suggested approach: Read docs/zeptoclaw-config-gotchas.md before
+choosing the model string. Verify the chosen name against `GET /v1/models`.
+```
+
+Risk levels: `low` (score < 1.0), `medium` (< 3.0), `high` (< 6.0), `critical` (≥ 6.0). Thresholds are tunable via `AMPLIFIER_ORACLE_THRESHOLD_MEDIUM` / `_HIGH` / `_CRITICAL`.
+
+Confirmed lessons count five times as much as raw claims — see *Verification-Gated Memory* below.
+
+### `amplify_record_claim` — log an unverified guess (v1.4.0)
+
+When Claude infers a fix but hasn't actually verified it works yet, record it as a `claim`. Claims show up in preflight at reduced weight (0.2× vs 1.0× for confirmed) so unverified guesses can't poison future advice.
+
+```js
+amplify_record_claim({
+  project: "my-api",
+  type: "mistake",
+  title: "Suspect: missing CORS header on /api/upload",
+  description: "Build failed after refactor. CORS header was removed in commit abc123.",
+  severity: "medium",
+})
+// → returns { id: 17, status: "claim", confidence: 0.5 }
+```
+
+### `amplify_verify_claim` — promote claim → evidence → confirmed (v1.4.0)
+
+```js
+// First evidence — promotes claim → evidence (confidence 0.7)
+amplify_verify_claim({
+  id: 17,
+  evidence_type: "build_passed",
+  evidence_link: "https://github.com/.../actions/runs/12345",
+  notes: "CI green after re-adding the header",
+})
+
+// User confirmation — promotes evidence → confirmed (confidence 1.0)
+amplify_verify_claim({
+  id: 17,
+  evidence_type: "user_confirmation",
+  notes: "User confirmed: 'yes that was it'",
+})
+```
+
+**Promotion rules:**
+- `claim + 1 evidence` → `evidence` (confidence 0.7)
+- `evidence + user_confirmation` → `confirmed` (confidence 1.0)
+- `claim + 2 distinct evidence types` → `confirmed` (confidence 1.0)
+- Explicit `promote_to` overrides the auto-rule
+
+Evidence types: `build_passed` | `test_passed` | `user_confirmation` | `independent_observation` | `external_doc` | `production_metric`.
+
+### `amplify_promote_pattern` — graduate a recurring lesson to global (v1.4.0)
+
+When the same `pattern_key` has produced `confirmed` lessons in ≥2 projects, it has earned the right to a global pattern. This tool requires:
+- The `pattern_key` exists in ≥2 distinct projects
+- At least one confirmed lesson with that key
+
+```js
+amplify_promote_pattern({
+  pattern_key: "avoid-openai-prefix-on-zeptoclaw",
+  title: "Avoid 'openai/' prefix in ZeptoClaw model names",
+  description: "ZeptoClaw 0.9.2 runtime parses 'openai/' substring as openai provider, but startup code routes it as nvidia. Result: Invalid API Key on every heartbeat.",
+  example: "Use 'nvidia/gpt-oss-120b' or 'moonshotai/kimi-k2.6' instead.",
+})
+```
+
+Refuses promotion when the threshold isn't met — pattern_keys with only one project of evidence are *not* generalizable yet.
+
+### `amplify_evidence_chain` — show why a lesson is trusted (v1.4.0)
+
+```js
+amplify_evidence_chain({ id: 17, kind: "lesson" })
+// or
+amplify_evidence_chain({ id: 42, kind: "decision" })
+```
+
+Returns the full chain: original claim → each evidence link with type, link URL, who recorded it, and when → final status. Useful when you want to audit *why* the Oracle scored a task as high-risk.
+
+### `amplify_global_patterns` — cross-project rules
+
+```js
 amplify_global_patterns({
   op: "add",
   title: "Always back up before destructive operations",
-  description: "Before any rm -rf, database DROP, or file overwrite, create a backup.",
-  example: "cp -r ./data ./data.bak && rm -rf ./data",
-  tags: ["safety", "ops"]
+  description: "Before any rm -rf, DROP TABLE, or file overwrite: make a backup first.",
+  example: "cp -r ./data ./data.bak.$(date +%s)",
+  tags: ["safety", "ops"],
 })
+```
 
-// List all patterns
-amplify_global_patterns({ op: "get" })
+---
 
-// Pattern scoped to specific projects
-amplify_global_patterns({
-  op: "add",
-  title: "Use pnpm, never npm",
-  description: "This monorepo uses pnpm workspaces.",
-  applies_to: "my-monorepo,my-shared-lib"
-})
+## FAQ
+
+**Q: How is this different from putting things in `CLAUDE.md`?**
+
+`CLAUDE.md` is a *prompt* — read fully every session, costs tokens, and grows linearly forever. Claude Amplifier is a *queryable database* — Claude pulls in only what's relevant when it's relevant, and lessons that have happened three times look different from lessons that happened once.
+
+**Q: Is anything sent to a server?**
+
+No. Everything is in `~/.claude-amplifier/amplifier.db` on your own disk. No telemetry, no cloud, no syncing.
+
+**Q: Why not [mem0 / Letta / MemGPT]?**
+
+Those are full-stack memory systems with embeddings, retrieval, and orchestration. Great for production agents. Claude Amplifier is an opinionated *toolkit* for "I want Claude to remember things and tell me when patterns recur" — same SQLite the official MCP memory server uses, with a few features that matter for actual engineering work (`pattern_key`, decision lifecycles, recurrence counters).
+
+**Q: Can I use this in Claude Code AND Claude Desktop simultaneously?**
+
+Yes. They share the same SQLite database, so a lesson recorded in one is visible from the other.
+
+**Q: Will my lessons survive a Claude Amplifier upgrade?**
+
+Yes — the SQLite schema is forward-compatible. The `migrate()` step adds new columns without touching existing rows. Backup with `claude-amplifier export <project>` if you want to be cautious.
+
+**Q: What's the performance like?**
+
+Reading: indexed SQLite + WAL mode. Sub-millisecond up to ~50,000 rows. Writing: same order. The bottleneck is Claude reading the context, not the database serving it.
+
+**Q: Can I share lessons across machines or teammates?**
+
+Use `claude-amplifier export <project> --out lessons.json`, share the file, then `claude-amplifier import lessons.json` on the other side. Cloud sync is intentionally not built in — your team's hard-won architectural decisions probably shouldn't leave the building.
+
+---
+
+## Roadmap
+
+The next things on the table — open an issue if any of these matter to you and you'd like it to jump:
+
+- **Semantic search** — embed lessons + decisions for fuzzy "do we have anything like this?" lookups (Oracle currently uses token-overlap matching)
+- **Multi-project linking** — a decision in `frontend-app` can reference a constraint from `infra-platform`
+- **Claude Code SessionStart hook** — auto-call `context_load` without needing CLAUDE.md instruction
+- **Web dashboard** — read-only browser view of what Claude remembers (still local-only)
+- **Project archetypes** — `claude-amplifier seed --archetype=nodejs-saas` plants 20+ stack-specific lessons
+- **Auto-claim recording** — Claude-Code hook that wraps lessons-from-conversation into `record_claim` automatically
+
+---
+
+## Data storage
+
+```
+~/.claude-amplifier/amplifier.db
+```
+
+Five tables: `lessons`, `decisions`, `patterns`, `preferences`, `pattern_promotions`. WAL mode enabled.
+
+Lessons and decisions carry three v1.4.0 columns each: `verification_status` (`claim` / `evidence` / `confirmed`), `confidence` (0.0–1.0), and `evidence_links` (JSON array of evidence records).
+
+Inspect directly with any SQLite tool:
+
+```bash
+sqlite3 ~/.claude-amplifier/amplifier.db ".tables"
+sqlite3 ~/.claude-amplifier/amplifier.db "SELECT title, frequency FROM lessons WHERE frequency > 1 ORDER BY frequency DESC LIMIT 10;"
+sqlite3 ~/.claude-amplifier/amplifier.db "SELECT id, title, status FROM decisions WHERE status='active';"
 ```
 
 ---
@@ -210,13 +580,13 @@ amplify_global_patterns({
 
 ### `CLAUDE_AMPLIFIER_PROJECT`
 
-Set this env var to auto-bootstrap context on startup.
+Auto-bootstraps context on server startup.
 
 ```bash
-# As a path (final directory name becomes the project name)
+# Path (project name inferred from the directory basename)
 CLAUDE_AMPLIFIER_PROJECT=/home/user/projects/my-app
 
-# As a bare project name
+# Or bare project name
 CLAUDE_AMPLIFIER_PROJECT=my-app
 ```
 
@@ -224,55 +594,21 @@ If not set, falls back to `process.cwd()`.
 
 ---
 
-## Data Storage
+## Contributing
 
-All data is stored in a local SQLite database:
+Found a real-world pattern that should be a starter lesson? PRs welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-```
-~/.claude-amplifier/amplifier.db
-```
-
-- No cloud sync, no external services, no telemetry
-- Data is yours, stored locally, readable with any SQLite tool
-- Four tables: `lessons`, `decisions`, `patterns`, `preferences`
-- WAL mode enabled for safe concurrent access
-
-To inspect your data directly:
+## Build from source
 
 ```bash
-sqlite3 ~/.claude-amplifier/amplifier.db
-
-> SELECT * FROM lessons ORDER BY created_at DESC LIMIT 10;
-> SELECT * FROM decisions WHERE status = 'active';
-> SELECT * FROM patterns;
-```
-
----
-
-## Build from Source
-
-```bash
-git clone https://github.com/YOUR_USERNAME/claude-amplifier
+git clone https://github.com/Sisuthros/claude-amplifier
 cd claude-amplifier
 npm install
 npm run build
-node dist/index.js
+npm test            # 45 tests, all should pass
+node dist/index.js help
 ```
-
----
-
-## Why `node:sqlite`?
-
-Claude Amplifier uses Node's built-in SQLite module (`node:sqlite`, available since Node 22.5). This means:
-
-- **No native compilation** — no `node-gyp`, no C++ compiler, no prebuild pain
-- **Zero runtime dependencies** — `npm install` takes seconds
-- **Works on every platform** — Windows, macOS, Linux, ARM
-- **Survives process crashes** — WAL mode enabled by default
-- **Single file** — easy to back up, copy, or inspect with any SQLite tool
-
----
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).

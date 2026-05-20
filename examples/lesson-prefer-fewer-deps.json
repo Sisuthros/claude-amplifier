@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "insight",
+  "title": "New dependencies are a long-term tax",
+  "description": "Pulled in a 200KB library to format dates in one place. Six months later we needed to upgrade Node, the library was unmaintained, and the upgrade blocked on it. Replacing it with eight lines of stdlib code took an afternoon — including writing tests we hadn't had.",
+  "context": "Choosing whether to add a new package for a small, well-scoped need.",
+  "resolution": "Replaced the library with stdlib; deleted the dependency from package.json.",
+  "prevention": "Before adding a dependency, write the smallest version of the feature in stdlib code (5-30 lines). If that works, ship it. Only add the dependency if the scope is genuinely larger than that — and prefer well-maintained, popular, narrow packages over kitchen-sink ones.",
+  "severity": "low",
+  "tags": ["dependencies", "architecture", "maintenance"],
+  "trigger": "About to add a package to handle a feature that fits in <30 lines of stdlib code",
+  "pattern_key": "prefer-stdlib-for-small-features"
+}

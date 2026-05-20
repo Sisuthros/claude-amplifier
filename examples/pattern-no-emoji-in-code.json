@@ -1,0 +1,8 @@
+{
+  "op": "add",
+  "title": "No emoji in source code or commit messages",
+  "description": "Emoji can be added in user-facing UI strings when the design calls for them. Everything else — source code, comments, commit messages, log output, internal docs — stays emoji-free. Plain text searches and grep-ability beat decoration.",
+  "example": "// Good\nlogger.info(\"User signed in: \" + userId);\n\n// Bad\nlogger.info(\"✅ User signed in: \" + userId);",
+  "tags": ["style", "logging", "convention"],
+  "applies_to": "all"
+}

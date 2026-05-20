@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "insight",
+  "title": "Get wall-clock time at session start",
+  "description": "Made a 'today is Monday' assumption that was three days stale. Wrote a status update referring to events as 'tomorrow' that were already in the past.",
+  "context": "Long sessions, sessions resumed from compaction, or any work that mentions dates relative to 'now'.",
+  "resolution": "Re-checked the date and edited the message.",
+  "prevention": "First action in any session that touches dates, deadlines, or schedules: run the current-time tool (or `date`) and treat THAT as the source of truth. Never trust 'today' inferred from conversation context.",
+  "severity": "low",
+  "tags": ["time", "process", "session-start"],
+  "trigger": "About to mention 'today', 'yesterday', 'tomorrow', or a deadline",
+  "pattern_key": "check-time-at-session-start"
+}

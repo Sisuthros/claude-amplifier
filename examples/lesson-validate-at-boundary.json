@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "insight",
+  "title": "Validate at the boundary, trust internal code",
+  "description": "Added defensive null-checks and type-guards on every function in a module. The code became unreadable, and a real bug (an actually-null value from a third-party API) still got through because the checks were in the wrong place — five layers deep, after the value had already been used.",
+  "context": "Internal module call chain where the caller is fully under our control.",
+  "resolution": "Removed the internal guards, added one schema validation at the API ingress, and gave internal functions the types they always should have had.",
+  "prevention": "Validate untrusted input ONCE at the system boundary (HTTP handler, queue consumer, file parser, CLI argument parsing). Inside the boundary, trust the types. Don't add null-checks for situations that the type system says can't happen.",
+  "severity": "medium",
+  "tags": ["architecture", "validation", "types"],
+  "trigger": "About to add a null-check or type-guard inside an internal-only module",
+  "pattern_key": "validate-at-boundary-only"
+}

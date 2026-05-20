@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "mistake",
+  "title": "Read docs before guessing config keys",
+  "description": "Spent 40 minutes debugging a config key that didn't exist. The product uses strict validation and crashes on unknown keys. The docs had the answer on page one of the configuration reference.",
+  "context": "Setting up a new gateway / framework / tool whose config is validated strictly.",
+  "resolution": "Searched the local docs MCP for the key; found the correct name; the crash went away in 10 seconds.",
+  "prevention": "Before writing or editing any config block: open the configuration-reference page (or docs MCP) and confirm every key exists. Never paste config snippets from chat history without verifying them against current docs.",
+  "severity": "medium",
+  "tags": ["docs", "config", "process"],
+  "trigger": "About to write or modify a config file for a tool I have not used today",
+  "pattern_key": "read-docs-before-coding"
+}

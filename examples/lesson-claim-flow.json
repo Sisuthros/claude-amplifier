@@ -1,0 +1,37 @@
+{
+  "_comment": "Three-step claim → evidence → confirmed flow for a real CORS bug. Each step is a separate MCP call; the comments at the bottom show the order. Replace REPLACE_ME with your project name.",
+
+  "step_1_record_claim": {
+    "tool": "amplify_record_claim",
+    "args": {
+      "project": "REPLACE_ME",
+      "type": "mistake",
+      "title": "Suspect: missing CORS header on /api/upload",
+      "description": "Build broke after refactor; preflight requests started failing in the browser. Suspect commit abc123 removed Access-Control-Allow-Headers for the upload route.",
+      "severity": "medium",
+      "tags": ["cors", "regression"]
+    },
+    "returns": { "id": 17, "verification_status": "claim", "confidence": 0.5 }
+  },
+
+  "step_2_promote_to_evidence": {
+    "tool": "amplify_verify_claim",
+    "args": {
+      "id": 17,
+      "evidence_type": "build_passed",
+      "evidence_link": "https://github.com/REPLACE_ME/repo/actions/runs/12345",
+      "notes": "CI green after re-adding Access-Control-Allow-Headers: Content-Type, Authorization"
+    },
+    "returns": { "verification_status": "evidence", "confidence": 0.7 }
+  },
+
+  "step_3_promote_to_confirmed": {
+    "tool": "amplify_verify_claim",
+    "args": {
+      "id": 17,
+      "evidence_type": "user_confirmation",
+      "notes": "User confirmed in PR review: 'yes, that header was load-bearing'"
+    },
+    "returns": { "verification_status": "confirmed", "confidence": 1.0 }
+  }
+}
