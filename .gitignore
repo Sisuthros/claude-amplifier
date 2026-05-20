@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+
+# Database (user data, never commit)
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

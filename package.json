@@ -1,0 +1,44 @@
+{
+  "name": "claude-amplifier",
+  "version": "1.0.0",
+  "description": "Persistent memory for Claude across sessions via MCP",
+  "keywords": [
+    "claude",
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "ai",
+    "anthropic",
+    "sqlite"
+  ],
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/claude-amplifier"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "claude-amplifier": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node --experimental-sqlite dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
