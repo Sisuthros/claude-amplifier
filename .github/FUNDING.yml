@@ -1,0 +1,15 @@
+# GitHub Sponsors / Ko-fi -tukikanavat claude-amplifier-projektille.
+# Tämä tiedosto näyttää "Sponsor"-napin repon yläosassa.
+#
+# Aktivointi:
+#   1. Luo Ko-fi-tili osoitteessa https://ko-fi.com/  (ei vaadi KYC:tä, instant payout)
+#   2. Vaihda alle 'sisuthros' -> oma Ko-fi-username
+#   3. Halutessa: ota GitHub Sponsors -ohjelma käyttöön (vaatii GitHub Sponsors -hyväksynnän, ~päiviä)
+#
+# Dokumentaatio: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# Aseta nämä kun Ville on luonut tilit:
+ko_fi: sisuthros
+# github: [Sisuthros]   # Avataan kun GitHub Sponsors on hyväksytty
+# buy_me_a_coffee: sisuthros
+# custom: ['https://www.paypal.me/sisuthros']
