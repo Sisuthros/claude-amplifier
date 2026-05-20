@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Amplifier — Persistent memory MCP with Pattern Oracle</title>
+  <meta name="description" content="Persistent memory MCP for Claude with pattern oracle preflight and verification-gated lessons. Stop re-explaining the same architectural decisions every session." />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Claude Amplifier — Persistent memory MCP for Claude" />
+  <meta property="og:description" content="Pattern Oracle preflight + verification-gated lessons. Stop poisoning Claude's memory with unverified guesses." />
+  <meta property="og:image" content="/og-image.svg" />
+  <meta property="og:url" content="https://claude-amplifier.dev/" />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Claude Amplifier 1.4.0" />
+  <meta name="twitter:description" content="Persistent memory MCP for Claude with Pattern Oracle preflight + verification-gated lessons." />
+  <meta name="twitter:image" content="/og-image.svg" />
+
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+
+  <!-- Plausible placeholder (uncomment after domain setup) -->
+  <!-- <script defer data-domain="claude-amplifier.dev" src="https://plausible.io/js/script.js"></script> -->
+</head>
+<body>
+  <main class="container">
+
+    <!-- HERO -->
+    <section class="hero">
+      <p class="eyebrow">v1.4.0 &middot; MIT &middot; MCP server</p>
+      <h1>claude-amplifier</h1>
+      <p class="tagline">
+        Persistent memory MCP for Claude with
+        <span class="accent">Pattern Oracle preflight</span>
+        + <span class="accent">verification-gated lessons</span>.
+      </p>
+      <p class="subtagline">
+        Stop re-explaining the same architectural decisions to Claude every session.
+        Stop letting Claude's unverified guesses quietly poison future advice.
+      </p>
+
+      <div class="cta-row">
+        <div class="install-cmd">
+          <code>npm install -g claude-amplifier@1.4.0</code>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/Sisuthros/claude-amplifier" target="_blank" rel="noopener">
+          GitHub &rarr;
+        </a>
+      </div>
+    </section>
+
+    <!-- PROBLEM -->
+    <section class="block">
+      <h2>The problem</h2>
+      <p class="lead">
+        Claude forgets. Claude also remembers things it shouldn't.
+      </p>
+
+      <ul class="problem-list">
+        <li>
+          <strong>&ldquo;Get some sleep&rdquo; &mdash; at 6 PM.</strong>
+          The previous session had run 02:00&ndash;06:00. Claude assumed the conversation was continuous.
+          No clock check, no session boundary, no idea you'd just come home from work.
+        </li>
+        <li>
+          <strong>MongoDB suggestions, four times this week.</strong>
+          We switched to Postgres three months ago. The decision and its rationale lives in your head
+          &mdash; nowhere Claude can read it.
+        </li>
+        <li>
+          <strong>The same bug, three different sessions.</strong>
+          Three nearly-identical mistakes in code review. Claude has no memory that any of them happened.
+        </li>
+        <li>
+          <strong>A guess, now a &ldquo;lesson.&rdquo;</strong>
+          Claude inferred a fix that wasn't actually correct, wrote it down,
+          and now that guess feeds back into every future session as if it were verified.
+          <a href="https://github.com/anthropics/claude-code/issues/27430" target="_blank" rel="noopener">
+            (issue #27430)
+          </a>
+        </li>
+      </ul>
+    </section>
+
+    <!-- SOLUTION -->
+    <section class="block">
+      <h2>The solution</h2>
+      <p class="lead">
+        An MCP server with a local SQLite database, a Pattern Oracle that warns
+        before Claude walks into a known landmine, and a verification chain that
+        distinguishes <em>claimed</em> from <em>evidenced</em> from <em>confirmed</em>.
+      </p>
+
+      <h3>1. Pattern Oracle &mdash; preflight risk check</h3>
+      <pre class="code-block"><code>&gt; amplify_preflight({ task: "Configure NIM endpoint" })
+
+&#9888;  HIGH RISK (score 4.20)
+Evidence quality: STRONG
+
+Matched patterns (3):
+  &bull; [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+    seen 3x across 2 projects, severity: critical
+  &bull; [confirmed] Read NIM /v1/models before configuring fallback chains
+    seen 5x across 3 projects, severity: high
+  &bull; [evidence]  Heartbeat models need TPM &ge; 30k
+    seen 2x, severity: high
+
+Suggested approach: Read docs/zeptoclaw-config-gotchas.md before
+choosing the model string. Verify against `GET /v1/models`.</code></pre>
+
+      <h3>2. Verification-gated memory &mdash; no more confabulation feedback loop</h3>
+      <pre class="code-block"><code>// Claude infers a fix it hasn't verified
+&gt; amplify_record_claim({ ... })            status: claim     conf: 0.5
+
+// Build passes, attach evidence
+&gt; amplify_verify_claim({
+    id: 17,
+    evidence_type: "build_passed",
+    evidence_link: "https://github.com/.../actions/runs/12345"
+  })                                         status: evidence  conf: 0.7
+
+// User confirms in the next session
+&gt; amplify_verify_claim({
+    id: 17,
+    evidence_type: "user_confirmation"
+  })                                         status: confirmed conf: 1.0</code></pre>
+
+      <p class="footnote">
+        The Oracle weights matches by status: a <code>confirmed</code> lesson at score 1.0 counts
+        <strong>five times</strong> as much as a raw <code>claim</code> at 0.2.
+        Unverified guesses cannot drown out hard-won truth.
+      </p>
+    </section>
+
+    <!-- COMPARISON -->
+    <section class="block">
+      <h2>vs. the official memory server</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th><code>server-memory</code></th>
+              <th><code>claude-amplifier</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Decisions with rationale + alternatives</td>
+              <td class="no">&mdash;</td>
+              <td class="yes">&check;</td>
+            </tr>
+            <tr>
+              <td>Recurrence tracking (<code>frequency</code> &times;N)</td>
+              <td class="no">&mdash;</td>
+              <td class="yes">&check;</td>
+            </tr>
+            <tr>
+              <td>Pattern grouping (<code>pattern_key</code>)</td>
+              <td class="no">&mdash;</td>
+              <td class="yes">&check;</td>
+            </tr>
+            <tr>
+              <td>Lifecycle: outcome check-ins / restore steps</td>
+              <td class="no">&mdash;</td>
+              <td class="yes">&check;</td>
+            </tr>
+            <tr>
+              <td>Preflight risk warnings (Pattern Oracle)</td>
+              <td class="no">&mdash;</td>
+              <td class="yes">&check; v1.4.0</td>
+            </tr>
+            <tr>
+              <td>Verification-gated memory (claim / evidence / confirmed)</td>
+              <td class="no">&mdash;</td>
+              <td class="yes">&check; v1.4.0</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="footnote">
+        The official server is great for &ldquo;remember entities and how they relate.&rdquo;
+        Claude Amplifier is for &ldquo;remember <em>why</em> we decided this,
+        <em>what</em> keeps going wrong, and <em>when</em> I scheduled a follow-up.&rdquo;
+      </p>
+    </section>
+
+    <!-- QUICK START -->
+    <section class="block">
+      <h2>Quick start</h2>
+      <pre class="code-block"><code>npm install -g claude-amplifier@1.4.0
+claude-amplifier init       # auto-detect Claude Desktop / Claude Code
+claude-amplifier seed       # plant three starter lessons
+# restart Claude. that's it.</code></pre>
+
+      <p>Then add one line to your <code>CLAUDE.md</code>:</p>
+      <pre class="code-block"><code>At the START of every session:
+amplify_context_load({ project: "&lt;your-project&gt;", types: ["all"] })</code></pre>
+    </section>
+
+    <!-- ROADMAP -->
+    <section class="block">
+      <h2>Roadmap</h2>
+      <ul class="roadmap">
+        <li>
+          <span class="ver">v1.5</span>
+          <span class="title">Semantic search</span>
+          <span class="desc">Embed lessons + decisions for fuzzy &ldquo;do we have anything like this?&rdquo; lookups. Oracle currently uses token overlap.</span>
+        </li>
+        <li>
+          <span class="ver">v1.6</span>
+          <span class="title">SessionStart hook</span>
+          <span class="desc">Claude Code auto-calls <code>context_load</code> without needing a CLAUDE.md instruction.</span>
+        </li>
+        <li>
+          <span class="ver">v1.7</span>
+          <span class="title">Local dashboard</span>
+          <span class="desc">Read-only browser view of what Claude remembers. Still 100% local.</span>
+        </li>
+        <li>
+          <span class="ver">v2.0</span>
+          <span class="title">Team sync</span>
+          <span class="desc">Opt-in shared memory for teammates &mdash; with explicit allowlists, no cloud-by-default.</span>
+        </li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <div class="footer-links">
+        <a href="https://github.com/Sisuthros/claude-amplifier" target="_blank" rel="noopener">GitHub</a>
+        <span class="sep">&bull;</span>
+        <a href="https://www.npmjs.com/package/claude-amplifier" target="_blank" rel="noopener">npm</a>
+        <span class="sep">&bull;</span>
+        <a href="https://ko-fi.com/" target="_blank" rel="noopener">Ko-fi</a>
+        <span class="sep">&bull;</span>
+        <a href="https://github.com/Sisuthros/claude-amplifier/blob/main/LICENSE" target="_blank" rel="noopener">MIT</a>
+      </div>
+      <p class="copy">
+        Built by <a href="https://github.com/Sisuthros" target="_blank" rel="noopener">Sisuthros</a>.
+        Your memory stays on your disk &mdash; no telemetry, no cloud, no syncing.
+      </p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" font-family="JetBrains Mono, monospace">
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0d1117"/>
+
+  <!-- Grid pattern (subtle) -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#161b22" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00C896" stop-opacity="0.2"/>
+      <stop offset="50%" stop-color="#00C896" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#58a6ff" stop-opacity="0.4"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- Version badge -->
+  <g transform="translate(80, 80)">
+    <rect width="120" height="32" rx="4" fill="#161b22" stroke="#30363d"/>
+    <text x="60" y="22" fill="#8b949e" font-size="14" text-anchor="middle">v1.4.0 &middot; MIT</text>
+  </g>
+
+  <!-- Title -->
+  <text x="80" y="220" fill="#e6edf3" font-size="86" font-weight="700" letter-spacing="-2">
+    claude-amplifier
+  </text>
+
+  <!-- Tagline -->
+  <text x="80" y="290" fill="#e6edf3" font-size="32" font-weight="400">
+    Persistent memory MCP for Claude
+  </text>
+  <text x="80" y="335" fill="#00C896" font-size="32" font-weight="500">
+    + Pattern Oracle preflight
+  </text>
+  <text x="80" y="380" fill="#00C896" font-size="32" font-weight="500">
+    + Verification-gated lessons
+  </text>
+
+  <!-- Wave separator -->
+  <path d="M 80 440 Q 200 410 320 440 T 560 440 T 800 440 T 1040 440 T 1120 440" stroke="url(#wave)" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+  <!-- Install command -->
+  <g transform="translate(80, 480)">
+    <rect width="800" height="60" rx="6" fill="#161b22" stroke="#30363d"/>
+    <text x="24" y="38" fill="#6e7681" font-size="22">$</text>
+    <text x="48" y="38" fill="#00C896" font-size="22">npm install -g claude-amplifier@1.4.0</text>
+  </g>
+
+  <!-- Footer brand -->
+  <text x="80" y="585" fill="#6e7681" font-size="18">
+    github.com/Sisuthros/claude-amplifier &mdash; SQLite, local, no cloud
+  </text>
+</svg>
