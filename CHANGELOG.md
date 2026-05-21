@@ -6,6 +6,13 @@ All notable changes to Claude Amplifier are documented here.
 
 ### Added
 
+- **Read-only web dashboard.** New `claude-amplifier dashboard` CLI command
+  launches a localhost-only HTTP server (default port `18796`, bind
+  `127.0.0.1`) that serves a vanilla HTML/CSS/JS dashboard for browsing
+  stored lessons, decisions, patterns, and the v1.4.0 evidence chains and
+  pattern-promotion history. Pass `--port N` to override and `--open` to
+  auto-launch the browser. Vanilla JS + SVG-rendered frequency histogram,
+  zero build step, no extra runtime dependencies.
 - **SessionEnd auto-claim hook.** A new Claude Code SessionEnd hook
   (`claude-amplifier hook session-end`) reads the session transcript on
   exit and uses deterministic string heuristics to suggest up to three

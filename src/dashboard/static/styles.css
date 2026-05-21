@@ -295,6 +295,7 @@ select#project-select:focus-visible {
   display: flex; align-items: center; justify-content: center;
   z-index: 100; padding: 20px;
 }
+.modal-backdrop[hidden] { display: none; }
 .modal {
   background: var(--bg-elev); border: 1px solid var(--border);
   border-radius: 8px; max-width: 720px; width: 100%;
