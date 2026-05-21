@@ -34,13 +34,15 @@
   },
   "files": [
     "dist",
+    "dist/dashboard",
+    "dist/dashboard/static",
     "examples",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-dashboard-static.mjs",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "npm run build && node --test tests/*.test.js",

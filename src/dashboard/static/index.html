@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Claude Amplifier — Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar" role="banner">
+    <div class="topbar-inner">
+      <a href="/" class="brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="brand-name">claude-amplifier</span>
+        <span class="brand-tag">dashboard</span>
+      </a>
+      <div class="topbar-controls">
+        <label for="project-select" class="sr-only">Project filter</label>
+        <select id="project-select" aria-label="Filter by project">
+          <option value="">all projects</option>
+        </select>
+        <button id="refresh-btn" type="button" class="btn-sm" aria-label="Refresh data">refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab is-active" data-tab="lessons" role="tab" aria-selected="true" aria-controls="panel-lessons">Lessons</button>
+    <button class="tab" data-tab="decisions" role="tab" aria-selected="false" aria-controls="panel-decisions">Decisions</button>
+    <button class="tab" data-tab="patterns" role="tab" aria-selected="false" aria-controls="panel-patterns">Patterns</button>
+    <button class="tab" data-tab="stats" role="tab" aria-selected="false" aria-controls="panel-stats">Stats</button>
+  </nav>
+
+  <main class="container" id="main">
+    <section id="panel-lessons" class="panel is-active" role="tabpanel" aria-labelledby="tab-lessons">
+      <div class="panel-head">
+        <h2>Lessons</h2>
+        <p class="panel-sub">Recorded mistakes, insights, warnings and successes. Click any row to see the evidence chain.</p>
+      </div>
+      <div id="lessons-list" class="card-list" aria-live="polite"><div class="loading">Loading lessons…</div></div>
+    </section>
+
+    <section id="panel-decisions" class="panel" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Decisions</h2>
+        <p class="panel-sub">Architectural &amp; design decisions, with rationale and supersede chain.</p>
+      </div>
+      <div id="decisions-list" class="card-list"><div class="loading">Loading decisions…</div></div>
+    </section>
+
+    <section id="panel-patterns" class="panel" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Patterns &amp; Promotions</h2>
+        <p class="panel-sub">Global cross-project patterns + audit log of pattern promotions (v1.4.0).</p>
+      </div>
+      <div id="patterns-list" class="card-list"><div class="loading">Loading patterns…</div></div>
+      <h3 class="section-title">Promotion history</h3>
+      <div id="promotions-list" class="card-list"><div class="loading">Loading promotions…</div></div>
+    </section>
+
+    <section id="panel-stats" class="panel" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Statistics</h2>
+        <p class="panel-sub">Totals, verification breakdown, and how often the same pattern recurs.</p>
+      </div>
+
+      <div class="kpi-grid" id="kpi-grid" aria-label="Totals">
+        <div class="kpi"><div class="kpi-num" data-kpi="lessons">—</div><div class="kpi-lbl">lessons</div></div>
+        <div class="kpi"><div class="kpi-num" data-kpi="decisions">—</div><div class="kpi-lbl">decisions</div></div>
+        <div class="kpi"><div class="kpi-num" data-kpi="patterns">—</div><div class="kpi-lbl">patterns</div></div>
+        <div class="kpi"><div class="kpi-num" data-kpi="projects">—</div><div class="kpi-lbl">projects</div></div>
+        <div class="kpi"><div class="kpi-num" data-kpi="promotions">—</div><div class="kpi-lbl">promotions</div></div>
+      </div>
+
+      <h3 class="section-title">Verification status</h3>
+      <div id="verification-bar" class="verif-bar" aria-label="Verification status breakdown"></div>
+      <div id="verification-legend" class="verif-legend"></div>
+
+      <h3 class="section-title">Frequency histogram</h3>
+      <p class="hint">How many lessons have been seen N times. The right-most bar collapses 10+.</p>
+      <div id="histogram" class="histogram-container" aria-label="Lesson frequency histogram"></div>
+
+      <h3 class="section-title">Per-project</h3>
+      <div id="project-table" class="card-list"></div>
+    </section>
+  </main>
+
+  <!-- Modal for evidence chain -->
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <h3 id="modal-title">Evidence chain</h3>
+        <button type="button" class="modal-close" id="modal-close" aria-label="Close">×</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span class="footer-text">read-only · localhost:<span id="footer-port">18796</span> · v1.4.0</span>
+  </footer>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
