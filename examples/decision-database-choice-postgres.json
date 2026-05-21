@@ -1,0 +1,52 @@
+{
+  "_comment": "Production database choice with full rationale, alternatives, trade-offs, a 90-day check-in, and decision relations (triggered_by + caused). Use as a template for any significant infra choice you want to be able to revisit with full context.",
+
+  "op": "track",
+  "project": "REPLACE_ME",
+  "category": "architecture",
+  "title": "Postgres for production, SQLite for local-dev only",
+  "description": "Production runs managed Postgres (single primary + hot replica). Local development and CI use SQLite via a thin compatibility layer for the subset of features both engines share. No SQLite in production, no Postgres requirement for a contributor's first `make dev`.",
+  "rationale": "Two pressures pointed the same way. Production needs concurrent writers, row-level locking, and the JSON/full-text/geo features Postgres ships with. Local-dev needs zero-install onboarding so a new contributor can clone the repo and run tests in under a minute. SQLite is fine for the test-fixture data we use locally; Postgres is the right call for live traffic.",
+  "tags": ["database", "postgres", "sqlite", "core-architecture"],
+  "trade_offs": [
+    "Two SQL dialects to keep in sync — any query using Postgres-only features (JSONB ops, CTEs in certain shapes, LATERAL joins) needs a SQLite-compatible alternative or a guard",
+    "Bugs that only reproduce under Postgres-specific isolation behaviour will not show up in local tests",
+    "Schema migrations must be tested against both engines in CI"
+  ],
+  "alternatives_considered": [
+    "SQLite for production — rejected: write concurrency ceiling too low for our target load",
+    "Postgres for local-dev too — rejected: onboarding friction; new contributors abandon at the install step",
+    "MySQL — rejected: weaker JSON support and we already have Postgres expertise in-house",
+    "DynamoDB — rejected: vendor lock-in, weak local-dev story, lacks SQL"
+  ],
+  "outcome_check_in": "+90d",
+  "next_step": "Wire up a CI matrix job that runs the full test suite against both SQLite and Postgres on every PR",
+  "restore_step": "If Postgres goes down: failover to hot replica (automatic, RTO ~60s). If both are lost: restore latest WAL-backed snapshot from object storage; document last-known-good RPO is 5 minutes.",
+  "verification_status": "evidence",
+  "confidence": 0.75,
+  "evidence_links": [
+    {
+      "evidence_type": "build_passed",
+      "evidence_link": "https://github.com/REPLACE_ME/repo/actions/runs/121212",
+      "notes": "Initial schema migrates cleanly on both engines; smoke tests green"
+    }
+  ],
+  "relations": {
+    "triggered_by": [
+      {
+        "id": "DECISION_ID_OF_PARENT",
+        "title": "Adopt SQL as the primary persistence layer (rejected NoSQL/document stores)",
+        "type": "triggered_by",
+        "notes": "Choosing SQL in the parent decision forced the question of which engine"
+      }
+    ],
+    "caused": [
+      {
+        "id": "DECISION_ID_OF_CHILD",
+        "title": "Adopt sqlx + compile-time query checking",
+        "type": "caused",
+        "notes": "Picking Postgres + SQLite for dev made compile-time query verification a hard requirement"
+      }
+    ]
+  }
+}

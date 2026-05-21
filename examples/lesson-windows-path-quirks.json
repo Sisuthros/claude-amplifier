@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "mistake",
+  "title": "Windows path quirks (HOME vs USERPROFILE, forward vs backslash)",
+  "description": "A cross-platform script assumed `$HOME` was set and used forward slashes everywhere. It worked on macOS/Linux and inside WSL, but failed silently on native Windows: PowerShell does not set HOME by default (it sets USERPROFILE), and several tools that accept forward slashes on input then re-emit backslashes in error messages, which broke a downstream regex that matched the path verbatim. Lost a full afternoon chasing 'file not found' errors when the file was actually there — under a different separator.",
+  "context": "Any script, tool, or config file that needs to run on both POSIX (macOS/Linux/WSL) and native Windows. Especially common when sharing dotfiles, deploy scripts, or test fixtures across team members on mixed platforms.",
+  "resolution": "Switched to `os.path.expanduser('~')` / Node `os.homedir()` / Rust `dirs::home_dir()` instead of reading `$HOME` directly. Replaced all hand-written path concatenation with the platform's `path.join` equivalent. Normalised separators at every boundary that takes a path as input (regex matchers, log scrapers, JSON config writers).",
+  "prevention": "Never read `$HOME` directly in code that may run on Windows — use the language's home-directory helper. Never concatenate paths with `/` or `\\` — use `path.join` (Python `pathlib`, Node `path`, Rust `PathBuf`). Treat any path coming from a Windows process as potentially containing backslashes even if you passed it forward slashes. Add at least one CI job on `windows-latest` for any tool that claims cross-platform support.",
+  "severity": "high",
+  "tags": ["windows", "paths", "cross-platform", "portability"],
+  "trigger": "About to write code that touches the filesystem, reads HOME/USERPROFILE, or parses paths from another process's output, in a project that may run on Windows",
+  "pattern_key": "windows-path-portability"
+}

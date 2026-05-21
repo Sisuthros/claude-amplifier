@@ -16,6 +16,8 @@ Each `.json` file in this folder is a payload you can pass directly to the corre
 | `lesson-rename-via-tooling.json` | refactoring | Use the language server for renames, not find/replace |
 | `lesson-validate-at-boundary.json` | architecture | Validate untrusted input at the system boundary, trust internal code |
 | `lesson-prefer-fewer-deps.json` | dependencies | New dependencies are a long-term tax; prefer the stdlib when reasonable |
+| `lesson-rate-limit-recovery.json` | reliability | Diversify LLM providers and treat 429 as a per-provider cooldown, not a per-request retry |
+| `lesson-windows-path-quirks.json` | portability | `$HOME` vs `%USERPROFILE%` and `/` vs `\` — use `path.join` and the platform home helper |
 
 ## Decision templates
 
@@ -23,6 +25,8 @@ Each `.json` file in this folder is a payload you can pass directly to the corre
 |------|----------|------------------|
 | `decision-database-choice.json` | architecture | Database engine choice with rationale and tradeoffs |
 | `decision-deploy-target.json` | infrastructure | Deployment target choice (e.g. Docker on a single VPS vs. k8s) |
+| `decision-database-choice-postgres.json` | architecture | Full Postgres-vs-SQLite decision with evidence, 90-day check-in, and `triggered_by` / `caused` relations |
+| `decision-deploy-vercel-vs-fly.json` | infrastructure | Split frontend (Vercel) / backend (Fly.io) deployment with `restore_step` and a `relates_to` link to the database decision |
 
 ## Pattern templates
 
@@ -30,6 +34,7 @@ Each `.json` file in this folder is a payload you can pass directly to the corre
 |------|-------|------------------|
 | `pattern-conventional-commits.json` | all projects | Commit message format convention |
 | `pattern-no-emoji-in-code.json` | all projects | Disallow emoji in source files |
+| `pattern-llm-credentials.json` | all projects | Never store LLM provider tokens in CLAUDE.md or committed configs; env-var precedence chain |
 
 ## v1.4.0 — Pattern Oracle + Verification flows
 

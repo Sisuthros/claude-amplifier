@@ -1,0 +1,38 @@
+{
+  "_comment": "Split-deployment decision: frontend on Vercel, backend on Fly.io. Includes trade_offs, restore_step, and a relates_to link to the database decision (decision-database-choice-postgres). Demonstrates how to record a cross-cutting infra choice that depends on a prior one.",
+
+  "op": "track",
+  "project": "REPLACE_ME",
+  "category": "infrastructure",
+  "title": "Vercel for frontend, Fly.io for backend",
+  "description": "The Next.js frontend deploys to Vercel (preview URL per PR, edge cache, automatic SSL). The API and background workers run on Fly.io in two regions close to our user base, with the Postgres primary in one of them. No bridge service between them — the frontend talks to the backend over HTTPS using a stable custom domain.",
+  "rationale": "Vercel removes the entire build-and-deploy pipeline for the frontend at no marginal cost, and its preview URLs are how the team reviews UI changes. Fly.io is the lowest-friction way we found to run a long-lived backend with persistent volumes, websockets, and a Postgres instance in the same region. Putting everything on one provider would either compromise frontend DX (no preview URLs) or backend control (no persistent state, no websockets).",
+  "tags": ["deployment", "vercel", "fly.io", "split-stack"],
+  "trade_offs": [
+    "Two dashboards, two billing relationships, two sets of secrets to manage",
+    "Cross-origin requests every page load — CORS config must stay correct or auth breaks silently",
+    "Frontend preview URLs hit production backend by default; staging backend requires manual env override",
+    "If Vercel rate-limits builds we lose preview URLs but production keeps serving (cached); if Fly goes down the site loads but is read-only"
+  ],
+  "alternatives_considered": [
+    "Everything on Vercel (serverless functions for backend) — rejected: no long-lived processes, no websockets, no persistent volumes",
+    "Everything on Fly.io (frontend served from same app) — rejected: lose preview URLs, slower iteration on UI changes",
+    "Self-hosted on a single VPS — rejected: we want the preview-URL workflow more than we want a single hosting provider",
+    "AWS (ECS + Amplify or CloudFront) — rejected: ops overhead too high for current team size"
+  ],
+  "outcome_check_in": "+60d",
+  "next_step": "Set up a synthetic monitor that hits the frontend + backend round-trip every minute and alerts on either side failing",
+  "restore_step": "Frontend: redeploy from `main` via Vercel dashboard (idempotent, ~2 min). Backend: `fly deploy` from the `infra/` directory in the repo; secrets live in Fly's secret store, not in git. Database is covered by the Postgres decision's restore_step.",
+  "verification_status": "claim",
+  "confidence": 0.6,
+  "relations": {
+    "relates_to": [
+      {
+        "id": "DECISION_ID_OF_POSTGRES_CHOICE",
+        "title": "Postgres for production, SQLite for local-dev only",
+        "type": "relates_to",
+        "notes": "Backend region selection on Fly is driven by where the Postgres primary lives — these two decisions must be revisited together if either provider changes"
+      }
+    ]
+  }
+}

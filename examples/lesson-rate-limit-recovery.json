@@ -1,0 +1,13 @@
+{
+  "project": "REPLACE_ME",
+  "type": "insight",
+  "title": "Rate-limited model → fallback chain",
+  "description": "A long-running agent loop kept calling the same primary model and got wedged once the provider rate-limit fired. Anthropic returned HTTP 429 with a 5-hour reset window, OpenAI returned 429 'tokens per minute exceeded', and NVIDIA NIM free-tier silently dropped requests after the weekly quota burned through. The agent retried in a tight loop instead of falling over to a different provider, and burned the whole session waiting for a reset.",
+  "context": "Any agent / batch job / heartbeat that calls an LLM provider on a schedule, or any interactive session that issues many requests within a short window (e.g. Claude Code refactoring, Cursor batch edits, autonomous agents).",
+  "resolution": "Added a fallback chain ordered by cost and provider diversity. Primary → fallback-1 → fallback-2 → cheap-local. Each retry hops to the next provider instead of re-hammering the rate-limited one. Cooldown timers per provider so a 429 puts that provider on ice for the remainder of the reset window.",
+  "prevention": "Before deploying any agent that calls an LLM on a loop: (1) configure at least two providers from different vendors, (2) treat 429 / quota_exceeded / weekly_limit responses as a provider-level cooldown, not a per-request retry, (3) log which provider answered each request so rate-limit patterns are visible in production, (4) keep a local fallback (Ollama / llama.cpp) as the final hop so the loop never wedges entirely.",
+  "severity": "high",
+  "tags": ["llm", "rate-limit", "reliability", "fallback"],
+  "trigger": "Designing or modifying any code path that calls an LLM provider in a loop, on a cron, or in an autonomous agent",
+  "pattern_key": "model-rate-limit-fallback"
+}
