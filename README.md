@@ -107,24 +107,32 @@ At the START of every session: amplify_context_load({ project: "<your-project>",
 
 ---
 
-## How does this compare to other Claude memory MCPs?
+## How does this compare to other memory tools?
 
-| Feature                                | `@modelcontextprotocol/server-memory` (official) | Claude Amplifier               |
-| -------------------------------------- | :----------------------------------------------: | :----------------------------: |
-| Persistent storage                     | ✅ (knowledge graph)                              | ✅ (SQLite)                     |
-| Decisions with rationale + alternatives| ❌                                                | ✅                              |
-| Lessons with `type` (mistake/insight)  | ❌                                                | ✅                              |
-| Recurrence tracking (`frequency` ×N)   | ❌                                                | ✅                              |
-| Pattern grouping (`pattern_key`)       | ❌                                                | ✅ (v1.2.0)                     |
-| Lifecycle: outcome check-ins / blocks  | ❌                                                | ✅ (v1.1.0)                     |
-| Knowledge graph (`triggered_by`, etc.) | ✅ (entities + relations)                         | ✅ (decision-level)             |
-| Preflight risk warnings                | ❌                                                | ✅ Pattern Oracle (v1.4.0)      |
-| Verification-gated memory              | ❌                                                | ✅ claim/evidence/confirmed (v1.4.0) |
-| Cross-project pattern promotion        | ❌                                                | ✅ (v1.4.0)                     |
-| CLI for setup / inspection / backup    | ❌                                                | ✅ `init / seed / list / stats` |
-| Starter content out-of-the-box         | ❌                                                | ✅ `claude-amplifier seed`      |
+Different products solve different shapes of "AI memory." This table is honest about which tool wins which axis — claude-amplifier is *not* a vector store, *not* an agent runtime, and *not* a knowledge graph. It's a queryable log of **decisions, lessons, and recurrence patterns** that Claude can consult before it acts.
 
-The official server is great if you just want **"remember entities and how they relate."** Claude Amplifier is for when you want **"remember *why* we decided this, *what* keeps going wrong, and *when* I scheduled a follow-up."**
+| Feature                              | claude-amplifier      | `@mcp/server-memory` | mem0                  | Letta / MemGPT       | Vector-memory MCPs    |
+| ------------------------------------ | :-------------------: | :------------------: | :-------------------: | :------------------: | :-------------------: |
+| Local-only / no telemetry            | ✅ SQLite              | ✅                    | partial (self-host)   | partial (self-host)  | varies                |
+| Persistent storage                   | ✅                     | ✅                    | ✅                     | ✅                    | ✅                     |
+| Decisions w/ rationale + lifecycle   | ✅ (v1.1.0)            | ❌                    | ❌                     | partial (free-form)  | ❌                     |
+| Recurrence counter + pattern grouping| ✅ (`pattern_key`)     | ❌                    | partial (dedup)       | ❌                    | ❌                     |
+| Knowledge graph between items        | ✅ (decision-level)    | ✅ (entity-relation)  | ✅ (graph store)       | ❌                    | ❌                     |
+| Semantic / embedding retrieval       | ❌ (token-overlap)     | ❌                    | ✅                     | ✅                    | ✅                     |
+| Self-editing agent memory blocks     | ❌                     | ❌                    | ❌                     | ✅ (core feature)     | ❌                     |
+| Preflight risk check before a task   | ✅ Pattern Oracle      | ❌                    | ❌                     | ❌                    | ❌                     |
+| Verification-gated (claim → confirmed)| ✅ (v1.4.0)           | ❌                    | ❌                     | ❌                    | ❌                     |
+| Cross-project pattern promotion      | ✅ (v1.4.0)            | ❌                    | partial (multi-user)  | ❌                    | ❌                     |
+| MCP-compatible out of the box        | ✅                     | ✅                    | ✅ (mem0-plugin)       | partial (via API)    | ✅                     |
+| CLI for setup / inspection / backup  | ✅                     | ❌                    | ❌ (SaaS dashboard)    | ❌ (web UI)           | varies                |
+
+### When to use which
+
+- **mem0** — when you need a production-grade memory layer with embeddings, hybrid retrieval, and entity linking for an AI agent already in production. Best paired with LangGraph / CrewAI / a chatbot serving real users.
+- **Letta / MemGPT** — when memory itself is a reasoning task and you're building a full-stack agent with a self-editing OS-style memory tier. You adopt Letta's runtime, not just its memory.
+- **`@modelcontextprotocol/server-memory`** — when you want the official Anthropic-shipped option for an entity-relation knowledge graph and don't need lifecycle, recurrence, or verification.
+- **Vector memory MCPs** (community SQLite-vec, Chroma-backed, etc.) — when the job is semantic search over a pile of notes or lessons and similarity is the only retrieval signal you need.
+- **claude-amplifier** — when you want Claude to **remember *why* you decided this, *what* keeps going wrong, and *when* you scheduled a follow-up** — and to *warn you before* it walks into a pattern that has burned you three times already. Optimised for solo / small-team engineering, not for serving end-users.
 
 ---
 

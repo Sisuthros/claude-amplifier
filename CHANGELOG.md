@@ -2,6 +2,16 @@
 
 All notable changes to Claude Amplifier are documented here.
 
+## [Unreleased]
+
+### Documentation
+
+- **README**: expanded comparison table covering mem0, Letta / MemGPT,
+  `@modelcontextprotocol/server-memory`, and the broader vector-memory
+  MCP category. Adds a "When to use which" guide that positions
+  claude-amplifier honestly as a *why / what / when* memory — not a
+  vector store, not an agent runtime, and not a knowledge graph.
+
 ## [1.4.0] — 2026-05-21
 
 Pattern Oracle + Verification-Gated Memory. The MCP gains five new tools
