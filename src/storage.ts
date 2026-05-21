@@ -974,7 +974,15 @@ export class SQLiteStore {
 
   loadContext(
     project: string,
-    types: Array<"lessons" | "decisions" | "patterns" | "bootstrap" | "all">
+    types: Array<"lessons" | "decisions" | "patterns" | "bootstrap" | "all">,
+    /**
+     * v1.4.1 — upper bound on how many lessons are fetched from SQLite
+     * before ranking/truncation happens in the handler. Defaults to 30
+     * for backwards compatibility; callers that pass smart-priority or
+     * a larger `max_tokens` should request a wider pool (e.g. 200) so
+     * the ranker has something to choose from.
+     */
+    lessonsPoolLimit?: number
   ): {
     /**
      * v1.2.0 — short one-line summary of what's in this context.
@@ -1003,7 +1011,8 @@ export class SQLiteStore {
       }>,
     };
 
-    if (all || types.includes("lessons"))   result.lessons   = this.getLessons(project, 30);
+    const lessonsLimit = lessonsPoolLimit && lessonsPoolLimit > 0 ? lessonsPoolLimit : 30;
+    if (all || types.includes("lessons"))   result.lessons   = this.getLessons(project, lessonsLimit);
     if (all || types.includes("decisions")) result.decisions = this.getDecisions(project);
     if (all || types.includes("patterns"))  result.patterns  = this.getPatterns(project);
     if (all || types.includes("bootstrap")) {

@@ -71,6 +71,9 @@ function printHelp(): void {
     "  " + cyan("export") + " <project> [--out]  Export everything for a project as JSON",
     "  " + cyan("import") + " <file.json>        Import a previously exported project bundle",
     "  " + cyan("doctor") + "                    Diagnose your setup and print actionable fixes",
+    "  " + cyan("hook-install") + "              Install Claude Code SessionEnd auto-claim hook",
+    "  " + cyan("hook session-end") + "          (called by Claude Code) scan transcript for claims",
+    "  " + cyan("dashboard") + " [--port --open] Launch a read-only web UI on 127.0.0.1 (default port 18796)",
     "  " + cyan("help") + "                      Show this message",
     "",
     bold("Examples:"),
@@ -99,6 +102,7 @@ interface InitOptions {
   project?: string;
   target?: "desktop" | "code" | "both" | "auto";
   cwd?: string;
+  writeClaudeMd?: boolean | null; // null = ask / auto, true = always, false = never
 }
 
 function detectInstallation(): { desktop: boolean; codeCwd: string | null } {
@@ -106,6 +110,72 @@ function detectInstallation(): { desktop: boolean; codeCwd: string | null } {
   const cwd = process.cwd();
   const codeCwd = existsSync(join(cwd, ".claude")) || existsSync(join(cwd, "CLAUDE.md")) ? cwd : null;
   return { desktop, codeCwd };
+}
+
+/**
+ * The marker block that `init` writes into CLAUDE.md. Idempotent — if the
+ * marker is already present the block is left alone. Surrounding marker
+ * comments let future versions detect + upgrade the block without
+ * duplicating it.
+ */
+const AMPLIFIER_BLOCK_START = "<!-- claude-amplifier:start -->";
+const AMPLIFIER_BLOCK_END = "<!-- claude-amplifier:end -->";
+
+function buildAmplifierBlock(projectName: string): string {
+  return [
+    AMPLIFIER_BLOCK_START,
+    "## Claude Amplifier",
+    "",
+    "At the **start of every session**, before any other action, call:",
+    "",
+    "```",
+    `amplify_context_load({ project: "${projectName}", types: ["all"] })`,
+    "```",
+    "",
+    "This restores prior decisions, lessons, and patterns for this project.",
+    "Before any risky task, call `amplify_preflight({ project, task })` to",
+    "check for known failure patterns. Record new insights with",
+    "`amplify_record_claim`, then promote them to `confirmed` with",
+    "`amplify_verify_claim` once you have evidence.",
+    AMPLIFIER_BLOCK_END,
+  ].join("\n");
+}
+
+/**
+ * Insert (or upgrade) the amplifier block in CLAUDE.md. Returns
+ * "created" | "updated" | "already-present" | "missing-file".
+ */
+function updateClaudeMd(
+  cwd: string,
+  projectName: string,
+): "created" | "updated" | "already-present" | "missing-file" {
+  const path = join(cwd, "CLAUDE.md");
+  const block = buildAmplifierBlock(projectName);
+
+  if (!existsSync(path)) {
+    return "missing-file";
+  }
+
+  const existing = readFileSync(path, "utf-8");
+  const hasStart = existing.includes(AMPLIFIER_BLOCK_START);
+  const hasEnd = existing.includes(AMPLIFIER_BLOCK_END);
+
+  if (hasStart && hasEnd) {
+    // Replace the existing block in place — keeps surrounding content intact.
+    const before = existing.slice(0, existing.indexOf(AMPLIFIER_BLOCK_START));
+    const afterIdx = existing.indexOf(AMPLIFIER_BLOCK_END) + AMPLIFIER_BLOCK_END.length;
+    const after = existing.slice(afterIdx);
+    const replaced = before + block + after;
+    if (replaced === existing) return "already-present";
+    writeFileSync(path, replaced, "utf-8");
+    return "updated";
+  }
+
+  // Append the block at the end with a separating blank line.
+  const needsLeadingNewline = existing.length > 0 && !existing.endsWith("\n");
+  const sep = needsLeadingNewline ? "\n\n" : existing.endsWith("\n\n") ? "" : "\n";
+  writeFileSync(path, existing + sep + block + "\n", "utf-8");
+  return "updated";
 }
 
 export function cmdInit(opts: InitOptions = {}): number {
@@ -156,13 +226,40 @@ export function cmdInit(opts: InitOptions = {}): number {
     return 1;
   }
 
+  // CLAUDE.md auto-update — the biggest first-run friction was that users
+  // had to remember to add the `amplify_context_load` call themselves.
+  // We do it automatically when CLAUDE.md exists, unless the user passed
+  // `--no-write-claude-md`.
+  const shouldWriteClaudeMd = opts.writeClaudeMd !== false;
+  if (shouldWriteClaudeMd) {
+    const result = updateClaudeMd(cwd, projectName);
+    switch (result) {
+      case "updated":
+        console.log(green("✓") + " Added amplify_context_load block to " + cyan("CLAUDE.md"));
+        break;
+      case "already-present":
+        console.log(dim("·") + " CLAUDE.md already has the amplify block");
+        break;
+      case "missing-file":
+        console.log(
+          yellow("!") +
+            " No CLAUDE.md in " +
+            dim(cwd) +
+            " — create one and re-run to add the start-of-session call.",
+        );
+        break;
+    }
+  }
+
   console.log("");
   console.log(bold("Next steps:"));
   console.log("  1. Restart Claude Desktop or open a new Claude Code session");
   console.log("  2. Run " + cyan("claude-amplifier seed") + " to populate recommended starter lessons");
-  console.log("  3. (Optional) Add to your " + cyan("CLAUDE.md") + ":");
-  console.log(dim("       At the START of every session:"));
-  console.log(dim("         amplify_context_load({ project: \"" + projectName + "\", types: [\"all\"] })"));
+  if (opts.writeClaudeMd === false) {
+    console.log("  3. Add to your " + cyan("CLAUDE.md") + " manually:");
+    console.log(dim("       At the START of every session:"));
+    console.log(dim("         amplify_context_load({ project: \"" + projectName + "\", types: [\"all\"] })"));
+  }
   console.log("");
   return 0;
 }
@@ -472,11 +569,20 @@ export async function runCli(rawArgs: string[]): Promise<number> {
   const { positional, flags } = parseFlags(rest);
 
   switch (cmd) {
-    case "init":
+    case "init": {
+      // `--write-claude-md` / `--no-write-claude-md` toggle the
+      // auto-update of CLAUDE.md. Default (undefined) = write if file exists.
+      let writeClaudeMd: boolean | null = null;
+      if (flags["write-claude-md"] === true) writeClaudeMd = true;
+      else if (flags["no-write-claude-md"] === true || flags["write-claude-md"] === false) {
+        writeClaudeMd = false;
+      }
       return cmdInit({
         project: (flags.project as string) || undefined,
         target: (flags.target as InitOptions["target"]) || "auto",
+        writeClaudeMd,
       });
+    }
     case "seed":
       return cmdSeed({ project: (flags.project as string) || undefined });
     case "list":
@@ -497,6 +603,49 @@ export async function runCli(rawArgs: string[]): Promise<number> {
       return cmdImport({ file: positional[0] });
     case "doctor":
       return cmdDoctor();
+    case "hook-install": {
+      const { cmdHookInstall } = await import("./cli_hook.js");
+      const scope = (flags.scope as "project" | "user") || "project";
+      return cmdHookInstall({ scope, dryRun: flags["dry-run"] === true });
+    }
+    case "hook": {
+      // `claude-amplifier hook session-end` — dispatched by Claude Code itself.
+      const sub = positional[0];
+      if (sub !== "session-end") {
+        console.error("Usage: claude-amplifier hook session-end (called by Claude Code)");
+        return 1;
+      }
+      const { runHookSessionEnd } = await import("./cli_hook.js");
+      return await runHookSessionEnd();
+    }
+    case "dashboard": {
+      const { startDashboard } = await import("./dashboard/server.js");
+      const port = flags.port ? parseInt(String(flags.port), 10) : 18796;
+      if (Number.isNaN(port) || port <= 0 || port > 65535) {
+        console.error("Invalid --port (expected 1-65535).");
+        return 1;
+      }
+      const open = flags.open === true || flags.open === "true";
+      try {
+        const handle = await startDashboard({ port, open });
+        console.log(green("✓") + " Dashboard running at " + cyan(handle.url));
+        console.log(dim("  Bound to 127.0.0.1 only (read-only, no auth needed)."));
+        console.log(dim("  Press Ctrl+C to stop."));
+        // Keep the process alive until SIGINT.
+        await new Promise<void>((resolveStop) => {
+          const stop = () => {
+            console.log("\n" + dim("Shutting down…"));
+            handle.close().finally(() => resolveStop());
+          };
+          process.on("SIGINT", stop);
+          process.on("SIGTERM", stop);
+        });
+        return 0;
+      } catch (err) {
+        console.error("Dashboard failed to start: " + (err as Error).message);
+        return 1;
+      }
+    }
     case "help":
     case "-h":
     case "--help":

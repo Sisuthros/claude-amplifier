@@ -4,6 +4,118 @@ import { SQLiteStore, Lesson, Decision, Pattern } from "./storage.js";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+// v1.4.1 — context_load truncation defaults
+const DEFAULT_CONTEXT_MAX_TOKENS = 4000;
+const CONTEXT_LESSONS_POOL_LIMIT = 200; // fetch this many before ranking
+
+type PriorityMode = "smart" | "recent" | "frequency";
+
+/**
+ * Cheap token estimate: ~4 chars per token. We deliberately avoid a real
+ * tokenizer dependency — this runs on every session start and the goal is
+ * "don't drown the context", not exact accounting.
+ */
+function estimateTokens(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Weight applied to a lesson's verification_status when ranking by "smart".
+ * Confirmed > evidence > claim; unset is treated like "claim".
+ */
+function verificationStatusWeight(status?: string): number {
+  switch (status) {
+    case "confirmed":
+      return 1.5;
+    case "evidence":
+      return 1.0;
+    case "claim":
+      return 0.3;
+    default:
+      return 0.5; // legacy lessons with no status — neutral
+  }
+}
+
+/**
+ * Recency bonus: lessons recorded in the last 14 days get +1.5.
+ * Returns 0 if the date can't be parsed (defensive).
+ */
+function recencyBonus(createdAt: string, nowMs: number = Date.now()): number {
+  const ts = Date.parse(createdAt.replace(" ", "T") + "Z");
+  if (Number.isNaN(ts)) return 0;
+  const ageDays = (nowMs - ts) / (1000 * 60 * 60 * 24);
+  return ageDays < 14 ? 1.5 : 0;
+}
+
+/**
+ * Smart score:
+ *   frequency × 2.0 + confidence × 3.0 + recency_bonus + status_weight
+ *
+ * Defaults are tuned so a fresh, confirmed, repeating lesson beats an
+ * old single-occurrence claim by a wide margin without any one signal
+ * dominating.
+ */
+function smartScore(l: Lesson, nowMs: number = Date.now()): number {
+  const freq = l.frequency ?? 1;
+  const conf = l.confidence ?? 0.5;
+  return (
+    freq * 2.0 +
+    conf * 3.0 +
+    recencyBonus(l.created_at, nowMs) +
+    verificationStatusWeight(l.verification_status)
+  );
+}
+
+/**
+ * Sort lessons in place by the requested priority mode.
+ *   - "recent":   newest created_at first (legacy behaviour).
+ *   - "frequency": highest frequency first, tie-break by recency.
+ *   - "smart":    weighted score (see smartScore).
+ */
+function sortLessonsByPriority(
+  lessons: Lesson[],
+  mode: PriorityMode,
+  nowMs: number = Date.now()
+): Lesson[] {
+  const sorted = [...lessons];
+  if (mode === "recent") {
+    sorted.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  } else if (mode === "frequency") {
+    sorted.sort((a, b) => {
+      const fa = a.frequency ?? 1;
+      const fb = b.frequency ?? 1;
+      if (fb !== fa) return fb - fa;
+      return a.created_at < b.created_at ? 1 : -1;
+    });
+  } else {
+    // smart
+    sorted.sort((a, b) => smartScore(b, nowMs) - smartScore(a, nowMs));
+  }
+  return sorted;
+}
+
+/**
+ * Greedily include items from `items` (already priority-sorted) until the
+ * remaining token budget would be exceeded. Returns the kept items plus
+ * how many were dropped.
+ */
+function truncateByTokenBudget<T>(
+  items: T[],
+  formatFn: (item: T) => string,
+  remainingBudget: number
+): { kept: T[]; dropped: number; tokensUsed: number } {
+  const kept: T[] = [];
+  let used = 0;
+  for (const item of items) {
+    const cost = estimateTokens(formatFn(item)) + 1; // +1 for the joining newline
+    if (used + cost > remainingBudget) break;
+    kept.push(item);
+    used += cost;
+  }
+  return { kept, dropped: items.length - kept.length, tokensUsed: used };
+}
+
 function parseTags(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string") {
@@ -348,10 +460,13 @@ export async function handleContextLoad(
   store: SQLiteStore,
   args: Record<string, unknown>
 ): Promise<string> {
-  const { project, project_path, types: rawTypes } = args as Record<
-    string,
-    unknown
-  >;
+  const {
+    project,
+    project_path,
+    types: rawTypes,
+    max_tokens: rawMaxTokens,
+    priority: rawPriority,
+  } = args as Record<string, unknown>;
 
   // Derive project name from path or explicit name
   let projectName = String(project || "");
@@ -374,32 +489,89 @@ export async function handleContextLoad(
     types = rawTypes as any;
   }
 
-  const ctx = store.loadContext(projectName, types);
+  // v1.4.1 — token budget + priority
+  const maxTokensRaw = Number(rawMaxTokens);
+  const maxTokens =
+    Number.isFinite(maxTokensRaw) && maxTokensRaw > 0
+      ? Math.floor(maxTokensRaw)
+      : DEFAULT_CONTEXT_MAX_TOKENS;
 
-  const sections: string[] = [
+  const priority: PriorityMode =
+    rawPriority === "recent" || rawPriority === "frequency"
+      ? rawPriority
+      : "smart";
+
+  // Fetch a wider lessons pool so the ranker has room to work.
+  const ctx = store.loadContext(projectName, types, CONTEXT_LESSONS_POOL_LIMIT);
+
+  // Rank lessons by chosen priority. Decisions/patterns are typically small
+  // and important enough that we keep them untruncated when possible.
+  const totalLessonsFound = ctx.lessons.length;
+  const rankedLessons = sortLessonsByPriority(ctx.lessons, priority);
+
+  // Build header (always emitted, doesn't count toward truncation calc but
+  // is small in practice).
+  const headerLines: string[] = [
     `=== Claude Amplifier Context: ${projectName} ===`,
     `Loaded at: ${new Date().toISOString()}`,
-    // v1.2.0 — one-line summary so the reader can orient before the full
-    // payload. Shows attention-required items (overdue, recurring) first.
     ctx.summary ? `Summary: ${ctx.summary}` : "",
+    `Budget: ${maxTokens} tokens · priority=${priority}`,
   ].filter(Boolean);
+
+  const sections: string[] = [...headerLines];
+
+  // Decisions: keep all but trim from the bottom if they alone would
+  // exceed the budget. Decisions are user-curated and few, so this
+  // virtually never trims in practice.
+  let budgetLeft = maxTokens - estimateTokens(headerLines.join("\n"));
+  const decisionTrunc = truncateByTokenBudget(
+    ctx.decisions,
+    formatDecision,
+    budgetLeft
+  );
+  budgetLeft -= decisionTrunc.tokensUsed;
 
   if (ctx.decisions.length) {
     sections.push(
-      `\n--- Active Decisions (${ctx.decisions.length}) ---`,
-      ...ctx.decisions.map(formatDecision)
+      `\n--- Active Decisions (${decisionTrunc.kept.length}${
+        decisionTrunc.dropped ? ` of ${ctx.decisions.length}` : ""
+      }) ---`,
+      ...decisionTrunc.kept.map(formatDecision)
     );
+    if (decisionTrunc.dropped) {
+      sections.push(
+        `... ${decisionTrunc.dropped} more decisions hidden (token budget). ` +
+          `Call again with max_tokens=${Math.max(maxTokens * 3, 12000)} to see more.`
+      );
+    }
   } else {
     sections.push("\n--- Active Decisions ---\nNone recorded yet.");
   }
 
-  if (ctx.lessons.length) {
+  // Lessons: this is the main truncation target. Apply token budget on the
+  // ranked list.
+  const lessonTrunc = truncateByTokenBudget(
+    rankedLessons,
+    formatLesson,
+    Math.max(0, budgetLeft)
+  );
+  budgetLeft -= lessonTrunc.tokensUsed;
+
+  if (totalLessonsFound) {
+    const droppedFromPool = lessonTrunc.dropped;
     sections.push(
-      `\n--- Recent Lessons (${ctx.lessons.length}) ---`,
-      ...ctx.lessons.map(formatLesson)
+      `\n--- Lessons (showed ${lessonTrunc.kept.length} of ${totalLessonsFound}, priority=${priority}) ---`,
+      ...lessonTrunc.kept.map(formatLesson)
     );
+    if (droppedFromPool > 0) {
+      sections.push(
+        `Showed top ${lessonTrunc.kept.length} of ${totalLessonsFound} lessons. ` +
+          `Use max_tokens=${Math.max(maxTokens * 3, 20000)} to see more, ` +
+          `or priority="recent"|"frequency" to change ranking.`
+      );
+    }
   } else {
-    sections.push("\n--- Recent Lessons ---\nNone recorded yet.");
+    sections.push("\n--- Lessons ---\nNone recorded yet.");
   }
 
   if (ctx.patterns.length) {

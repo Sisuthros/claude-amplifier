@@ -5,7 +5,51 @@
 [![Node.js Version](https://img.shields.io/node/v/claude-amplifier.svg)](https://www.npmjs.com/package/claude-amplifier)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io)
 
-> Stop re-explaining the same architectural decisions to Claude every single session.
+> Pattern Oracle preflight + verification-gated lessons for Claude.<br>
+> So unverified guesses can't quietly become "memories" Claude treats as facts.
+
+### A real five-minute story
+
+Last Tuesday, Claude told me my ZeptoClaw config was broken because the model name had `openai/` in it. The fix worked. I let Claude write that down as a lesson.
+
+This Tuesday — different session, different model, similar config — Claude "remembered" the fix and applied it again. Except the *real* problem this time was a TPM cap. Claude never tested its theory; it just trusted last week's confidently-recorded fix. I lost two hours.
+
+That's the bug. It's [filed as `anthropics/claude-code#27430`](https://github.com/anthropics/claude-code/issues/27430). It happens to everyone who lets Claude keep notes across sessions. **An inference becomes a memory. The memory becomes a "fact." The fact never gets verified.**
+
+Claude Amplifier 1.4.0 fixes this *structurally*. Every lesson lives at one of three statuses:
+
+```
+claim (0.5 confidence)   →   evidence (0.7)   →   confirmed (1.0)
+```
+
+A guess starts as a `claim` and weighs **5× less** than a `confirmed` lesson when the Pattern Oracle scores risk. To promote, you attach evidence: `build_passed`, `test_passed`, `user_confirmation`, `production_metric`, `external_doc`, `independent_observation`. Two distinct evidence types auto-promote a claim to `confirmed`. Without evidence, the guess stays a guess — and stays quiet.
+
+The Pattern Oracle runs *before* each task, scans your stored lessons + active decisions, and surfaces the top matches with their risk score and verification status. You see the receipts; Claude sees the receipts; nothing gets treated as gospel just because it got written down once.
+
+### Demo
+
+```
+$ claude-amplifier preflight --project demo \
+    --task "Configure NIM endpoint with openai/gpt-oss-120b"
+
+🟠 HIGH RISK   score 4.20   evidence: STRONG
+
+Matched patterns (3):
+  • [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+    seen 3× across 2 projects, severity: critical
+  • [confirmed] Read NIM /v1/models before configuring fallback chains
+    seen 5× across 3 projects, severity: high
+  • [confirmed] Heartbeat needs TPM >= 30k
+    seen 2×, severity: high
+
+Suggested approach: The 'openai/' substring is parsed as the openai
+provider at startup but routed as nvidia at runtime — every heartbeat
+returns "Invalid API Key". Try 'nvidia/gpt-oss-120b' instead.
+```
+
+A 45-second asciinema cast of the full claim → evidence → confirmed loop lives in [`demo/`](./demo/). Render it locally with `agg amplifier-demo.cast amplifier-demo.gif` once you've recorded the cast — see [`demo/README.md`](./demo/README.md).
+
+---
 
 Claude is brilliant inside one conversation and **shockingly oblivious** across sessions. Claude Amplifier is an [MCP](https://modelcontextprotocol.io) server that gives Claude persistent memory in a local SQLite database — decisions you've made, lessons you've learned, patterns you keep tripping over — so the next session starts where the last one left off.
 
@@ -90,7 +134,7 @@ The Oracle weights matches by status: a `confirmed` lesson at score 1.0 counts f
 # 1. Install
 npm install -g claude-amplifier
 
-# 2. Auto-detect Claude Desktop / Claude Code and wire it up
+# 2. Wire up Claude Desktop + Claude Code + your CLAUDE.md — all at once
 claude-amplifier init
 
 # 3. Plant the recommended starter lessons (see "Recommended starter lessons" below)
@@ -99,11 +143,7 @@ claude-amplifier seed
 # 4. Restart Claude. That's it.
 ```
 
-Then add this single line to your `CLAUDE.md` so Claude calls it at the start of every session:
-
-```
-At the START of every session: amplify_context_load({ project: "<your-project>", types: ["all"] })
-```
+`init` auto-detects Claude Desktop and Claude Code, registers the MCP server in their config, **and inserts the `amplify_context_load` call into your project's `CLAUDE.md`** between two marker comments so future runs upgrade in place. If you'd rather wire CLAUDE.md yourself, pass `--no-write-claude-md`.
 
 ---
 

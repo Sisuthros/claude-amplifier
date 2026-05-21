@@ -4,6 +4,50 @@ All notable changes to Claude Amplifier are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **SessionEnd auto-claim hook.** A new Claude Code SessionEnd hook
+  (`claude-amplifier hook session-end`) reads the session transcript on
+  exit and uses deterministic string heuristics to suggest up to three
+  lesson candidates for `amplify_record_claim`. Detects three signal
+  families: user corrections ("no, don't do that"), enduring rules
+  ("always X", "never Y"), and success confirmations ("perfect, that
+  worked"). No LLM call, no API key, no network — pure regex over the
+  JSONL transcript. The hook installs in one command:
+  `claude-amplifier hook-install` (`--scope user` for global). Output is
+  printed as a SessionEnd `systemMessage` plus a machine-parseable
+  `_amplifier` block on stdout. Suggestions are suggestions only — the
+  user (or the next session's Claude) decides whether to record them.
+  Implemented in `src/hooks/auto_claim_session_end.ts` (~200 LOC pure
+  module) and `src/cli_hook.ts` (CLI plumbing). 15 hermetic tests in
+  `tests/auto_claim.test.js`.
+
+- **`amplify_context_load` auto-truncation + smart priority.** Large
+  projects (100+ lessons) no longer flood the session with thousands
+  of tokens at startup. New optional arguments on the tool:
+  - `max_tokens` (default `4000`) — soft token budget for the rendered
+    context. Token cost is estimated cheaply with `Math.ceil(len/4)`.
+  - `priority` (default `"smart"`; also `"recent"` and `"frequency"`)
+    — how lessons are ranked before truncation.
+- Smart-priority scoring (in `src/tools.ts` → `smartScore`):
+  `score = frequency × 2.0 + confidence × 3.0 + recency_bonus + status_weight`,
+  where `recency_bonus` is `1.5` for lessons under 14 days old and
+  `status_weight` is `1.5 / 1.0 / 0.3` for
+  `confirmed / evidence / claim`.
+- Output header now declares `Budget: <n> tokens · priority=<mode>`,
+  and appends `Showed top N of M lessons. Use max_tokens=… to see more.`
+  whenever truncation actually dropped items.
+- New hermetic test file `tests/context_load_truncation.test.js` (6 tests):
+  budget enforcement, default budget, three priority modes, and the
+  truncation marker.
+
+### Changed
+
+- `SQLiteStore.loadContext()` accepts an optional `lessonsPoolLimit` so
+  the handler can pull a wider pool (now `200`) for ranking. Calls that
+  omit the argument keep the legacy `LIMIT 30` behaviour, so existing
+  callers are unaffected.
+
 ### Documentation
 
 - **README**: expanded comparison table covering mem0, Letta / MemGPT,
@@ -11,6 +55,13 @@ All notable changes to Claude Amplifier are documented here.
   MCP category. Adds a "When to use which" guide that positions
   claude-amplifier honestly as a *why / what / when* memory — not a
   vector store, not an agent runtime, and not a knowledge graph.
+
+### Notes
+
+- API is fully backwards compatible: calls that omit `max_tokens` and
+  `priority` still work. The only visible change for existing callers
+  is the one-line `Budget:` header and a smarter default ordering for
+  lessons (smart-priority instead of pure recency).
 
 ## [1.4.0] — 2026-05-21
 
