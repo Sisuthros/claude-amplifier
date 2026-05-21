@@ -32,6 +32,16 @@ export interface PreflightInput {
   candidateLessons: Lesson[];
   /** Active decisions for the project; oracle weighs them in. */
   candidateDecisions: Decision[];
+  /**
+   * v1.5 prototype: pre-computed semantic scores per (kind, refId).
+   * When the caller has run semantic search beforehand, it passes the scores
+   * in here. The oracle blends them with the token-overlap score.
+   * Enabled only when `AMPLIFIER_USE_SEMANTIC=true` and this field is present.
+   */
+  semanticScores?: {
+    lessons?: Map<number, number>;   // lesson.id -> cosine similarity [0..1]
+    decisions?: Map<number, number>; // decision.id -> cosine similarity [0..1]
+  };
 }
 
 export interface MatchedPattern {
@@ -195,11 +205,38 @@ export function preflight(input: PreflightInput): PreflightResult {
   // Match lessons. We need a minimum overlap to avoid noise.
   const OVERLAP_THRESHOLD = 0.15;
 
+  // ── v1.5 prototype: feature-flagged semantic blending ────────────────
+  // When AMPLIFIER_USE_SEMANTIC=true and the caller supplied semanticScores,
+  // we treat the higher of (token overlap, semantic score) as the effective
+  // match signal. This keeps the v1.4.0 behavior exactly intact when the
+  // flag is off, and lets us A/B the two strategies side-by-side.
+  //
+  // Blending strategy is intentionally simple-max so the prototype is easy
+  // to reason about. A real v1.5 should probably do a weighted blend
+  // (e.g. 0.6*semantic + 0.4*token) once we measure quality on a corpus.
+  const semanticEnabled =
+    process.env.AMPLIFIER_USE_SEMANTIC === "true" &&
+    input.semanticScores !== undefined;
+  const SEMANTIC_THRESHOLD = 0.5; // cosine ≥0.5 = roughly comparable to 0.15 overlap
+
   const matchedLessonObjs: Array<{ lesson: Lesson; overlap: number }> = [];
   for (const lesson of input.candidateLessons) {
-    const ov = lessonOverlap(promptTokens, lesson);
-    if (ov >= OVERLAP_THRESHOLD) {
-      matchedLessonObjs.push({ lesson, overlap: ov });
+    const tokenOv = lessonOverlap(promptTokens, lesson);
+    let effectiveOv = tokenOv;
+
+    if (semanticEnabled) {
+      const semScore = input.semanticScores?.lessons?.get(lesson.id) ?? 0;
+      // Rescale semantic score from [SEMANTIC_THRESHOLD..1] to [0..1] so it
+      // blends meaningfully with token-overlap which is already [0..1].
+      const semNormalized =
+        semScore >= SEMANTIC_THRESHOLD
+          ? (semScore - SEMANTIC_THRESHOLD) / (1 - SEMANTIC_THRESHOLD)
+          : 0;
+      effectiveOv = Math.max(tokenOv, semNormalized);
+    }
+
+    if (effectiveOv >= OVERLAP_THRESHOLD) {
+      matchedLessonObjs.push({ lesson, overlap: effectiveOv });
     }
   }
 
@@ -278,8 +315,19 @@ export function preflight(input: PreflightInput): PreflightResult {
   const matched_decisions: MatchedDecision[] = [];
   for (const decision of input.candidateDecisions) {
     if (decision.status !== "active") continue;
-    const ov = decisionOverlap(promptTokens, decision);
-    if (ov >= OVERLAP_THRESHOLD) {
+    const tokenOv = decisionOverlap(promptTokens, decision);
+    let effectiveOv = tokenOv;
+
+    if (semanticEnabled) {
+      const semScore = input.semanticScores?.decisions?.get(decision.id) ?? 0;
+      const semNormalized =
+        semScore >= SEMANTIC_THRESHOLD
+          ? (semScore - SEMANTIC_THRESHOLD) / (1 - SEMANTIC_THRESHOLD)
+          : 0;
+      effectiveOv = Math.max(tokenOv, semNormalized);
+    }
+
+    if (effectiveOv >= OVERLAP_THRESHOLD) {
       matched_decisions.push({
         id: decision.id,
         title: decision.title,

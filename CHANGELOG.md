@@ -2,6 +2,58 @@
 
 All notable changes to Claude Amplifier are documented here.
 
+## [Unreleased] — v1.5 prototype
+
+**Status: feature-branch prototype, NOT shipped.** Lives on
+`feat/v1.5-semantic-prototype`. Off by default. Requires manual install of
+the optional `@xenova/transformers` dependency to enable.
+
+### Added (prototype, gated behind `AMPLIFIER_USE_SEMANTIC=true`)
+
+- **`src/semantic.ts`** — sentence-embedding utilities backed by
+  `@xenova/transformers` running the `Xenova/all-MiniLM-L6-v2` quantized ONNX
+  model fully offline.
+  - `loadEmbedder()` — lazy singleton model loader (~2-5s cold start).
+  - `embed(text)` — produces a 384-dim L2-normalized `Float32Array`.
+  - `cosineSimilarity(a, b)` — scale-invariant similarity in `[-1, 1]`.
+  - `semanticSearch(query, candidates, topK, threshold)` — ranks candidates
+    by cosine similarity; honours pre-computed vectors for O(1) lookup.
+
+- **`src/storage_embeddings.ts`** — additive `embeddings` table
+  (`ref_kind`, `ref_id`, `vector` BLOB, `model`, `updated_at`) with helpers
+  `ensureEmbeddingsSchema`, `storeEmbedding`, `getEmbedding`,
+  `getAllEmbeddings`, `deleteEmbedding`, `countEmbeddings`. Does **not**
+  modify `src/storage.ts`; the v1.4.0 storage API is unchanged.
+
+- **`src/oracle.ts`** — `PreflightInput` gains an optional
+  `semanticScores` field. When `AMPLIFIER_USE_SEMANTIC=true` *and* the
+  caller supplies semantic scores, each candidate's effective overlap is
+  `max(token_overlap, normalized_semantic)`. With the flag off, behaviour
+  is byte-identical to 1.4.0.
+
+- **`tests/semantic.test.js`** — hermetic tests for cosine math and ranking.
+  The real embedder is never loaded; `_setEmbedderForTesting` injects a
+  deterministic mock so CI doesn't need ONNX weights.
+
+### Not Added (intentional gaps for prototype review)
+
+- No automatic embedding rebuild when lesson text changes.
+- No HNSW / sqlite-vec index — `semanticSearch` is O(n).
+- No CLI command yet (`amplify_reindex_embeddings` stays a stub).
+- No batching or quantization tuning.
+- `@xenova/transformers` is in `devDependencies` and is **not** auto-installed
+  by `pnpm install`. Run `pnpm install @xenova/transformers` to enable.
+  First run downloads ~100MB of ONNX weights to `~/.cache/transformers/`.
+
+### Open questions for Ville
+
+1. Blend strategy: current `max(token, semantic)` is a placeholder. A
+   weighted blend (e.g. `0.6 * semantic + 0.4 * token`) would be more
+   principled once we measure recall on the real lesson corpus.
+2. Threshold for "matched" — cosine `0.5` is hand-picked. Needs tuning.
+3. Lock embedding model fingerprint into a `models` table or just bump
+   `DEFAULT_EMBEDDING_MODEL`?
+
 ## [1.4.0] — 2026-05-21
 
 Pattern Oracle + Verification-Gated Memory. The MCP gains five new tools
