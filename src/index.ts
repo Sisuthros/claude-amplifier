@@ -235,6 +235,21 @@ const TOOLS = [
           description:
             "Which data types to load. Defaults to ['lessons','decisions','patterns']. Pass 'all' to include everything.",
         },
+        max_tokens: {
+          type: "number",
+          description:
+            "v1.4.1 — soft token budget for the rendered context. Default 4000. " +
+            "If exceeded, lower-priority lessons are dropped and the output notes 'Showed top N of M'. " +
+            "Use ~20000 to see everything in a large project.",
+        },
+        priority: {
+          type: "string",
+          enum: ["smart", "recent", "frequency"],
+          description:
+            "v1.4.1 — how to rank lessons when truncating. " +
+            "'smart' (default) = frequency × 2 + confidence × 3 + recency_bonus + status_weight. " +
+            "'recent' = newest first. 'frequency' = most-repeated first.",
+        },
       },
     },
   },
