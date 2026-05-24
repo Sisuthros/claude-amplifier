@@ -7,9 +7,9 @@
 ```bash
 node demo/prep-demo-db.mjs
 # This seeds ~/.claude-amplifier-demo.db with three confirmed lessons:
-#   - "Avoid model names containing 'openai/' on ZeptoClaw" (confirmed, freq 3)
+#   - "Avoid model names containing another provider's prefix" (confirmed, freq 3)
 #   - "Heartbeat needs TPM >= 30k" (confirmed, freq 2)
-#   - "Read NIM /v1/models before configuring fallback chains" (confirmed, freq 5)
+#   - "Read provider /v1/models before configuring fallback chains" (confirmed, freq 5)
 # Sets CLAUDE_AMPLIFIER_DB env var so all commands hit the demo db.
 ```
 
@@ -24,13 +24,13 @@ asciinema rec amplifier-demo.cast --cols 120 --rows 30 --idle-time-limit 2
 
 ```bash
 clear
-echo "# Configuring a new model on ZeptoClaw. Was this safe last time...?"
+echo "# Configuring a new model on the agent runtime. Was this safe last time...?"
 ```
 
 ### Beat 2 — preflight risk check (~10 seconds)
 
 ```bash
-claude-amplifier preflight --project demo --task "Configure NIM endpoint with openai/gpt-oss-120b"
+claude-amplifier preflight --project demo --task "Configure agent endpoint with vendor-a/vendor-b/model-x"
 ```
 
 Expected output (already prepared in the demo DB):
@@ -39,19 +39,19 @@ Expected output (already prepared in the demo DB):
 🟠 HIGH RISK  score 4.20  evidence: STRONG
 
 Matched patterns (3):
-  • [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+  • [confirmed] Avoid model names containing another provider's prefix
     seen 3× across 2 projects, severity: critical
-  • [confirmed] Read NIM /v1/models before configuring fallback chains
+  • [confirmed] Read provider /v1/models before configuring fallback chains
     seen 5× across 3 projects, severity: high
   • [confirmed] Heartbeat needs TPM >= 30k
     seen 2×, severity: high
 
-Suggested approach: Read docs/zeptoclaw-config-gotchas.md before
-choosing the model string. The 'openai/' substring is parsed as the
-openai provider at startup but routed as nvidia at runtime — every
+Suggested approach: Read your agent runtime's model-routing docs before
+choosing the model string. The 'vendor-b/' substring is parsed as
+vendor-b at runtime but authenticates as vendor-a at startup — every
 heartbeat returns "Invalid API Key".
 
-Try: nvidia/gpt-oss-120b  OR  moonshotai/kimi-k2.6
+Try: vendor-a/model-x  (single, unambiguous prefix)
 ```
 
 ### Beat 3 — log an unverified claim (~5 seconds)
@@ -83,7 +83,7 @@ Expected:
 ```bash
 claude-amplifier verify-claim --id 17 \
   --evidence-type user_confirmation \
-  --notes "Confirmed by Ville — no rate limits for 24h"
+  --notes "Confirmed by user — no rate limits for 24h"
 ```
 
 Expected:

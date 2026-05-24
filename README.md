@@ -10,9 +10,9 @@
 
 ### A real five-minute story
 
-Last Tuesday, Claude told me my ZeptoClaw config was broken because the model name had `openai/` in it. The fix worked. I let Claude write that down as a lesson.
+A week ago, Claude told me an agent runtime config was broken because the model name had another provider's prefix substring in it. The fix worked. I let Claude write that down as a lesson.
 
-This Tuesday — different session, different model, similar config — Claude "remembered" the fix and applied it again. Except the *real* problem this time was a TPM cap. Claude never tested its theory; it just trusted last week's confidently-recorded fix. I lost two hours.
+A week later — different session, different model, similar config — Claude "remembered" the fix and applied it again. Except the *real* problem this time was a TPM cap. Claude never tested its theory; it just trusted last week's confidently-recorded fix. I lost two hours.
 
 That's the bug. It's [filed as `anthropics/claude-code#27430`](https://github.com/anthropics/claude-code/issues/27430). It happens to everyone who lets Claude keep notes across sessions. **An inference becomes a memory. The memory becomes a "fact." The fact never gets verified.**
 
@@ -30,21 +30,21 @@ The Pattern Oracle runs *before* each task, scans your stored lessons + active d
 
 ```
 $ claude-amplifier preflight --project demo \
-    --task "Configure NIM endpoint with openai/gpt-oss-120b"
+    --task "Configure agent endpoint with vendor-a/vendor-b/model-x"
 
 🟠 HIGH RISK   score 4.20   evidence: STRONG
 
 Matched patterns (3):
-  • [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+  • [confirmed] Avoid model names containing another provider's prefix
     seen 3× across 2 projects, severity: critical
-  • [confirmed] Read NIM /v1/models before configuring fallback chains
+  • [confirmed] Read /v1/models before configuring fallback chains
     seen 5× across 3 projects, severity: high
   • [confirmed] Heartbeat needs TPM >= 30k
     seen 2×, severity: high
 
-Suggested approach: The 'openai/' substring is parsed as the openai
-provider at startup but routed as nvidia at runtime — every heartbeat
-returns "Invalid API Key". Try 'nvidia/gpt-oss-120b' instead.
+Suggested approach: The 'vendor-b/' substring is parsed as vendor-b at
+startup but routed as vendor-a at runtime — every heartbeat returns
+"Invalid API Key". Try 'vendor-a/model-x' instead.
 ```
 
 A 45-second asciinema cast of the full claim → evidence → confirmed loop lives in [`demo/`](./demo/). Render it locally with `agg amplifier-demo.cast amplifier-demo.gif` once you've recorded the cast — see [`demo/README.md`](./demo/README.md).
@@ -100,13 +100,13 @@ Ten MCP tools, five SQLite tables, zero cloud — your memory stays on your disk
 ```
    ┌─────────────────────────────────────────────────────────┐
    │  Before Claude starts a task                            │
-   │  > amplify_preflight({ task: "Configure NIM endpoint" })│
+   │  > amplify_preflight({ task: "Configure agent endpoint" })│
    │  ⚠️  HIGH RISK (score 4.2)                              │
    │  Matched patterns:                                      │
-   │    • "ZeptoClaw model name 'openai/' parsing bug"       │
+   │    • "Ambiguous provider-prefix in model name"          │
    │      (seen 3× across 2 projects, CONFIRMED)             │
    │  Evidence quality: STRONG                               │
-   │  Suggested approach: Read docs first, avoid openai/*    │
+   │  Suggested approach: Read docs first, single-prefix names │
    └─────────────────────────────────────────────────────────┘
                             ↓
    ┌─────────────────────────────────────────────────────────┐
@@ -335,13 +335,13 @@ If you record the same lesson twice (same `project + title + type`), Claude Ampl
 
 #### `pattern_key` — fuzzy pattern grouping (v1.2.0)
 
-Recurring patterns rarely surface with identical wording. *"Read NIM docs first,"* *"Check Hermes API spec,"* and *"Look at ZeptoClaw config docs"* are three separate lessons, but they're all the same underlying pattern. Setting `pattern_key` makes Claude Amplifier treat them as one:
+Recurring patterns rarely surface with identical wording. *"Read provider docs first,"* *"Check the API spec,"* and *"Look at the runtime config reference"* are three separate lessons, but they're all the same underlying pattern. Setting `pattern_key` makes Claude Amplifier treat them as one:
 
 ```js
 amplify_learn({
   project: "my-api",
   type: "mistake",
-  title: "Read NIM docs first",
+  title: "Read provider docs first",
   description: "...",
   pattern_key: "read-docs-before-coding",  // ← same key for all variants
   severity: "high",
@@ -446,8 +446,8 @@ Run this *before* Claude touches anything you'd rather not break. The Oracle sca
 ```js
 amplify_preflight({
   project: "my-api",
-  task: "Configure NIM endpoint with new model name",
-  context: "Photon ZeptoClaw setup",
+  task: "Configure agent endpoint with new model name",
+  context: "production agent setup",
 })
 ```
 
@@ -458,17 +458,17 @@ Response shape:
 Evidence quality: STRONG
 
 Matched patterns (3):
-  • [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+  • [confirmed] Avoid model names containing another provider's prefix
     seen 3× across 2 projects, severity: critical
-  • [confirmed] Read NIM /v1/models before configuring fallback chains
+  • [confirmed] Read provider /v1/models before configuring fallback chains
     seen 5× across 3 projects, severity: high
   • [evidence] Heartbeat models need TPM ≥ 30k
     seen 2×, severity: high
 
 Active decisions referenced (1):
-  • Photon primary: gpt-oss-120b NIM (no openai/ prefix)
+  • Agent heartbeat primary: high-TPM provider/model
 
-Suggested approach: Read docs/zeptoclaw-config-gotchas.md before
+Suggested approach: Read your runtime's model-routing docs before
 choosing the model string. Verify the chosen name against `GET /v1/models`.
 ```
 
@@ -526,10 +526,10 @@ When the same `pattern_key` has produced `confirmed` lessons in ≥2 projects, i
 
 ```js
 amplify_promote_pattern({
-  pattern_key: "avoid-openai-prefix-on-zeptoclaw",
-  title: "Avoid 'openai/' prefix in ZeptoClaw model names",
-  description: "ZeptoClaw 0.9.2 runtime parses 'openai/' substring as openai provider, but startup code routes it as nvidia. Result: Invalid API Key on every heartbeat.",
-  example: "Use 'nvidia/gpt-oss-120b' or 'moonshotai/kimi-k2.6' instead.",
+  pattern_key: "avoid-ambiguous-provider-prefix",
+  title: "Avoid model names containing another provider's prefix",
+  description: "Some agent runtimes parse the model string by substring to infer the provider. A name like 'vendor-a/vendor-b/model-x' may route as vendor-b at runtime but authenticate as vendor-a at startup, returning 'Invalid API Key' on every heartbeat.",
+  example: "Use 'vendor-a/model-x' (single, unambiguous prefix) instead.",
 })
 ```
 

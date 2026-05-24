@@ -23,7 +23,7 @@ site/
 ## Manual deploy (Vercel)
 
 ```bash
-cd D:/projektit/claude-amplifier-oss/site
+cd /path/to/claude-amplifier/site
 npx vercel --prod
 ```
 
@@ -49,7 +49,7 @@ Once deployed:
 ## Local preview
 
 ```bash
-cd D:/projektit/claude-amplifier-oss/site
+cd /path/to/claude-amplifier/site
 npx serve .
 # or any static server: python -m http.server 8000
 ```

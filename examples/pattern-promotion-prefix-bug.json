@@ -1,0 +1,48 @@
+{
+  "_comment": "Full pattern-promotion flow for a generic 'model name prefix' routing bug — an agent runtime parses the wrong substring as the provider name. Pattern was confirmed in two separate projects before being promoted to a cross-project global pattern.",
+
+  "step_0_prereq_lessons_already_exist": [
+    {
+      "id": 42,
+      "project": "project-a",
+      "pattern_key": "avoid-ambiguous-provider-prefix",
+      "verification_status": "confirmed",
+      "title": "Agent runtime misroutes model names containing another provider's prefix",
+      "frequency": 3
+    },
+    {
+      "id": 71,
+      "project": "project-b",
+      "pattern_key": "avoid-ambiguous-provider-prefix",
+      "verification_status": "confirmed",
+      "title": "Same substring routing bug, manifested 9h downtime",
+      "frequency": 2
+    }
+  ],
+
+  "step_1_check_pattern_stats": {
+    "tool": "amplify_preflight",
+    "args": {
+      "project": "any-project",
+      "task": "Configure agent with a model name that contains another provider's prefix"
+    },
+    "_note": "Will return high/critical risk because both lessons are confirmed in distinct projects."
+  },
+
+  "step_2_promote_to_global": {
+    "tool": "amplify_promote_pattern",
+    "args": {
+      "pattern_key": "avoid-ambiguous-provider-prefix",
+      "title": "Avoid model names containing another provider's prefix",
+      "description": "Some agent runtimes infer the provider by substring-matching the model string. A name like 'vendor-a/vendor-b/model-x' may be parsed as vendor-b at agent-loop time but as vendor-a at startup, causing auth failures on every heartbeat. Confirmed in two distinct projects — pattern is generalisable.",
+      "example": "Bad:  vendor-a/vendor-b/model-x\nGood: vendor-a/model-x  (use a name that contains only one provider prefix)",
+      "tags": ["agent-runtime", "config", "model-routing"]
+    },
+    "returns": {
+      "pattern_key": "avoid-ambiguous-provider-prefix",
+      "projects_covered": ["project-a", "project-b"],
+      "total_frequency": 5,
+      "promoted_at": "2026-05-21T03:14:00Z"
+    }
+  }
+}

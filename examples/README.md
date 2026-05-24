@@ -42,7 +42,7 @@ Each `.json` file in this folder is a payload you can pass directly to the corre
 |------|------------|----------------------|
 | `lesson-claim-flow.json` | `amplify_record_claim` → `amplify_verify_claim` (×2) | Three-step claim → evidence → confirmed lifecycle for a CORS regression |
 | `decision-with-evidence.json` | `amplify_decisions` (track) + `amplify_verify_claim` | Decision recorded with initial evidence, confirmed after a 30-day production check-in |
-| `pattern-promotion-zeptoclaw.json` | `amplify_preflight` + `amplify_promote_pattern` | Cross-project pattern promotion when the same `pattern_key` is confirmed in ≥2 projects |
+| `pattern-promotion-prefix-bug.json` | `amplify_preflight` + `amplify_promote_pattern` | Cross-project pattern promotion when the same `pattern_key` is confirmed in ≥2 projects |
 | `preflight-task-example.json` | `amplify_preflight` | Sample input and the expected risk-output shape, with matched patterns and decisions |
 
 ## Using a template

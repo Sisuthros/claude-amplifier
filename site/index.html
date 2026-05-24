@@ -98,20 +98,20 @@
       </p>
 
       <h3>1. Pattern Oracle &mdash; preflight risk check</h3>
-      <pre class="code-block"><code>&gt; amplify_preflight({ task: "Configure NIM endpoint" })
+      <pre class="code-block"><code>&gt; amplify_preflight({ task: "Configure agent endpoint" })
 
 &#9888;  HIGH RISK (score 4.20)
 Evidence quality: STRONG
 
 Matched patterns (3):
-  &bull; [confirmed] Avoid model names containing 'openai/' on ZeptoClaw
+  &bull; [confirmed] Avoid model names containing another provider's prefix
     seen 3x across 2 projects, severity: critical
-  &bull; [confirmed] Read NIM /v1/models before configuring fallback chains
+  &bull; [confirmed] Read provider /v1/models before configuring fallback chains
     seen 5x across 3 projects, severity: high
   &bull; [evidence]  Heartbeat models need TPM &ge; 30k
     seen 2x, severity: high
 
-Suggested approach: Read docs/zeptoclaw-config-gotchas.md before
+Suggested approach: Read your runtime's model-routing docs before
 choosing the model string. Verify against `GET /v1/models`.</code></pre>
 
       <h3>2. Verification-gated memory &mdash; no more confabulation feedback loop</h3>

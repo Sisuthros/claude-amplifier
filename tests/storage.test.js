@@ -68,7 +68,7 @@ describe("recordLesson with pattern_key (v1.2.0)", () => {
   test("three lessons with same pattern_key reach frequency=3", () => {
     const { store, cleanup } = freshStore();
     try {
-      for (const title of ["NIM", "Hermes", "ZeptoClaw"]) {
+      for (const title of ["vendor-a", "vendor-b", "vendor-c"]) {
         store.addLesson({
           project: "p",
           type: "mistake",
@@ -444,13 +444,13 @@ describe("loadContext summary line (v1.2.0)", () => {
         description: "x",
         tags: [],
         status: "active",
-        restore_step: "Run /root/patches/exec-host-unlock.sh after recreate",
+        restore_step: "Run ./scripts/post-recreate-setup.sh after recreate",
       });
       const ctx = store.loadContext("p", ["all"]);
       assert.equal(ctx.active_reminders.length, 1);
       assert.equal(
         ctx.active_reminders[0].restore_step,
-        "Run /root/patches/exec-host-unlock.sh after recreate"
+        "Run ./scripts/post-recreate-setup.sh after recreate"
       );
       assert.ok(ctx.summary.includes("restore step"));
     } finally {

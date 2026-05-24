@@ -77,7 +77,7 @@ The `dbPath` constructor param could break out of `~/.claude-amplifier/`, but it
 ## Recommended pre-publish actions
 
 ```cmd
-cd D:\projektit\claude-amplifier-oss
+cd /path/to/claude-amplifier
 fix-security-pre-publish.cmd
 ```
 

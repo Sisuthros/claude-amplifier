@@ -389,7 +389,7 @@ describe("verifyLesson promotion rules", () => {
         confidence: 0.5,
       });
       store.verifyLesson(lesson.id, "git_commit", "abc1234");
-      const final = store.verifyLesson(lesson.id, "user_confirmation", "Ville said yes");
+      const final = store.verifyLesson(lesson.id, "user_confirmation", "user said yes");
       assert.ok(final);
       assert.equal(final.verification_status, "confirmed");
       assert.equal(final.confidence, 1.0);

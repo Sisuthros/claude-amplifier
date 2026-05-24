@@ -37,9 +37,9 @@ npm install -g claude-amplifier@1.4.0
 Risk: HIGH (score 0.84)
 Matched: 3 confirmed lessons, 1 active decision
 - "read-docs-before-coding" (confirmed, freq=5, 2 projects)
-- "zeptoclaw-openai-substring-bug" (confirmed, freq=3)
-- DECISION: "Pin OpenClaw image to exact tag, not :latest"
-Suggested approach: read docs/zeptoclaw-config-gotchas-2026-05-19.md
+- "avoid-ambiguous-provider-prefix" (confirmed, freq=3)
+- DECISION: "Pin runtime image to exact tag, not :latest"
+Suggested approach: read your runtime's model-routing docs
 before touching agents.defaults.model.
 ```
 

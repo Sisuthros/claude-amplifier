@@ -139,8 +139,8 @@ unverified guesses as facts (confabulation feedback loop,
     example for a real CORS bug.
   - `decision-with-evidence.json` — decision recorded with initial
     verification status and outcome-check evidence.
-  - `pattern-promotion-zeptoclaw.json` — full pattern-promotion payload
-    for the openai/-prefix bug seen across multiple projects.
+  - `pattern-promotion-prefix-bug.json` — full pattern-promotion payload
+    for an ambiguous provider-prefix bug seen across multiple projects.
   - `preflight-task-example.json` — a sample input to `amplify_preflight`
     with the expected risk-output shape.
 
@@ -252,15 +252,15 @@ Docs-only patch release. No code changes.
   2. Running destructive shell commands in the wrong working directory.
   3. Guessing strict-validation config keys instead of reading the docs.
 
-  Real-world origin: same author's Claude told them to go to bed at 6 PM
-  on a Tuesday because the previous session had run from 02:00 to 06:00
-  and Claude assumed the conversation was a continuation. A two-line
-  `amplify_learn` call would have stopped this from being awkward.
+  Real-world origin: a long Claude session can drift into an assumed
+  continuation across actual calendar days. A two-line `amplify_learn`
+  call that pins "check the clock at session start" stops Claude from
+  recommending sleep at inappropriate hours.
 
 ## [1.2.0] — 2026-05-18
 
 Polish release derived from real-world dogfooding of v1.1.0 the same day:
-five updates to one decision (Lumen model choice) revealed a missing
+five updates to one decision (LLM model selection) revealed a missing
 "refine without replacing" operation, and three near-duplicate lessons
 revealed that exact-title matching was too strict for pattern detection.
 
@@ -290,7 +290,7 @@ revealed that exact-title matching was too strict for pattern detection.
   attention-required items (overdue check-ins, recurring patterns,
   restore steps):
   ```
-  Summary: [chimera-prime] 24 active decisions · 47 lessons ·
+  Summary: [my-project] 24 active decisions · 47 lessons ·
            8 high/critical · 3 recurring (seen 3x+) ·
            ⏰ 2 overdue check-ins · 🔧 5 restore steps
   ```

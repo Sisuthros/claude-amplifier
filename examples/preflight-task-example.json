@@ -5,8 +5,8 @@
     "tool": "amplify_preflight",
     "args": {
       "project": "REPLACE_ME",
-      "task": "Configure ZeptoClaw heartbeat to use a new model",
-      "context": "Photon is rate-limited on the current heartbeat model; need to pick a replacement that won't crash the daemon."
+      "task": "Configure agent heartbeat to use a new model",
+      "context": "The current heartbeat model is rate-limited; need to pick a replacement that won't crash the daemon."
     }
   },
 
@@ -16,31 +16,31 @@
     "evidence_quality": "strong",
     "matched_patterns": [
       {
-        "pattern_key": "no-mickey-mouse-heartbeat",
+        "pattern_key": "heartbeat-tpm-threshold",
         "title": "Heartbeat needs TPM ≥ 30k and ≥40k context",
         "verification_status": "confirmed",
         "frequency": 3,
-        "projects": ["chimera-prime", "zeptoclaw-fork"],
+        "projects": ["project-a", "project-b"],
         "score_contribution": 2.1
       },
       {
-        "pattern_key": "avoid-openai-prefix-on-zeptoclaw",
-        "title": "Don't use openai/ substring on ZeptoClaw",
+        "pattern_key": "avoid-ambiguous-provider-prefix",
+        "title": "Avoid model names containing another provider's prefix",
         "verification_status": "confirmed",
         "frequency": 5,
-        "projects": ["chimera-prime", "zeptoclaw-fork"],
+        "projects": ["project-a", "project-b"],
         "score_contribution": 1.4
       }
     ],
     "matched_decisions": [
       {
         "id": 38,
-        "title": "Photon heartbeat: groq/groq/compound primary",
+        "title": "Agent heartbeat primary: high-TPM provider/model",
         "status": "active",
         "score_contribution": 0.7
       }
     ],
-    "suggested_approach": "Read tools/heartbeat-cron.mjs for the current model fallback chain. Verify any candidate against TPM and context-window requirements documented in family-architecture-BEDROCK.md. Avoid model names containing 'openai/' substring.",
+    "suggested_approach": "Read your agent's heartbeat configuration for the current model fallback chain. Verify any candidate against the TPM and context-window requirements documented in your architecture notes. Avoid model names that contain another provider's prefix.",
     "thresholds_applied": {
       "medium": 1.0,
       "high": 3.0,
