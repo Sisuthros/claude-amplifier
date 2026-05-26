@@ -45,6 +45,14 @@ Each `.json` file in this folder is a payload you can pass directly to the corre
 | `pattern-promotion-prefix-bug.json` | `amplify_preflight` + `amplify_promote_pattern` | Cross-project pattern promotion when the same `pattern_key` is confirmed in ≥2 projects |
 | `preflight-task-example.json` | `amplify_preflight` | Sample input and the expected risk-output shape, with matched patterns and decisions |
 
+## v1.5.0 — Trust Rebuild flows
+
+| File | Tool | What it demonstrates |
+|------|------|----------------------|
+| `audit-freshness-example.json` | `amplify_audit_freshness` | Surface `memory/<date>.md` files newer than the latest Amplifier write — triage unrecorded sessions |
+| `suggest-pattern-key-example.json` | `amplify_suggest_pattern_key` | Find a canonical `pattern_key` before recording, so recurring lessons don't get split into two |
+| `promote-from-memory-md-example.json` | `amplify_promote_from_memory_md` | Read a memory-hook log and get DRAFT lesson/decision suggestions for a forgotten day |
+
 ## Using a template
 
 Ask Claude in any session:

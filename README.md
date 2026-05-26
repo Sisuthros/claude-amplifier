@@ -5,10 +5,12 @@
 [![Node.js Version](https://img.shields.io/node/v/claude-amplifier.svg)](https://www.npmjs.com/package/claude-amplifier)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io)
 
-> Pattern Oracle preflight + verification-gated lessons for Claude.<br>
-> So unverified guesses can't quietly become "memories" Claude treats as facts.
+> Persistent memory for Claude that doesn't lie to itself.<br>
+> Write-verification, stale-memory detection, Pattern Oracle, verification-gated lessons —
+> so unverified guesses can't quietly become "memories" Claude treats as facts,
+> and so fake "id: 1fd61c52af06f2bd" success messages can't paper over silent failures.
 
-### A real five-minute story
+### A real five-minute story (v1.4.0 origin)
 
 A week ago, Claude told me an agent runtime config was broken because the model name had another provider's prefix substring in it. The fix worked. I let Claude write that down as a lesson.
 
@@ -16,7 +18,23 @@ A week later — different session, different model, similar config — Claude "
 
 That's the bug. It's [filed as `anthropics/claude-code#27430`](https://github.com/anthropics/claude-code/issues/27430). It happens to everyone who lets Claude keep notes across sessions. **An inference becomes a memory. The memory becomes a "fact." The fact never gets verified.**
 
-Claude Amplifier 1.4.0 fixes this *structurally*. Every lesson lives at one of three statuses:
+### A second five-minute story (v1.5.0 origin)
+
+A different session, weeks later. Claude reported back: *"Decision recorded (id: 1fd61c52af06f2bd). Lesson recorded (id: 04371350ec263822)."* Five decisions, eight lessons, all with crisp hex IDs. Felt great.
+
+Next morning, I asked Claude to recall any of them. **None existed.** The MCP tool calls had failed silently — bad arguments, transient SQLite hiccups — and Claude had hallucinated the IDs to match the success-message template. The earlier session went to bed thinking it had captured a tier-jump's worth of context. Reality: the database was untouched.
+
+That's a different bug, in the same family: **state-out-of-sync between what Claude believes it did and what actually got persisted.** Hallucinated IDs look identical to real IDs to the model that wrote them.
+
+Claude Amplifier **v1.5.0** fixes this *structurally too*. Every `addLesson` and `addDecision` re-reads the row from SQLite before returning. If the follow-up SELECT comes back empty, storage throws a typed `AmplifierWriteError`, the MCP tool returns `ERROR: Lesson NOT recorded. Do not claim this was saved.`, and an audit line lands in `~/.claude-amplifier/write-errors.jsonl`. The "I saved it!" lie is no longer possible.
+
+`amplify_context_load` now also warns when `~/.claude/memory/<YYYY-MM-DD>.md` files are newer than the latest Amplifier write — catching the *other* shape of memory drift, where the session did real work in another logging surface but never recorded a lesson or decision for it.
+
+---
+
+Both bugs share a shape: **Claude lies confidently about its own state.** Verification-gated memory (v1.4.0) catches it on the *content* side. Write-verification + stale-memory detection (v1.5.0) catches it on the *storage* side. Pattern Oracle (v1.4.0) keeps using the now-trustworthy memory to warn before the next mistake.
+
+Claude Amplifier (v1.5.0) treats every lesson as living at one of three statuses:
 
 ```
 claim (0.5 confidence)   →   evidence (0.7)   →   confirmed (1.0)
@@ -69,7 +87,7 @@ These are real moments. They happen to everyone who uses Claude regularly:
 
 > 🌀 **Claude wrote down a "lesson" that wasn't true.** It guessed a config key was wrong, the build still failed for an unrelated reason, and now that guess is in memory — feeding back into every future session as if it were verified. ([#27430](https://github.com/anthropics/claude-code/issues/27430))
 
-Claude Amplifier doesn't fix Claude. It gives Claude a **place to remember** so you don't have to be the memory — and as of **v1.4.0**, a **Pattern Oracle** that warns Claude *before* it walks into a known landmine, plus **Verification-Gated Memory** that distinguishes between *claimed*, *evidenced*, and *confirmed* lessons so guesses can't quietly poison future advice.
+Claude Amplifier doesn't fix Claude. It gives Claude a **place to remember** so you don't have to be the memory — plus a **Pattern Oracle** that warns Claude *before* it walks into a known landmine, **Verification-Gated Memory** that distinguishes between *claimed*, *evidenced*, and *confirmed* lessons so guesses can't quietly poison future advice, **Write-Verification** that makes silent storage failures structurally impossible, and **Stale-Memory Detection** that catches sessions which logged work elsewhere but forgot to record it here.
 
 ---
 
@@ -93,9 +111,42 @@ Claude Amplifier doesn't fix Claude. It gives Claude a **place to remember** so 
    └─────────────────────────────────────────────────────────┘
 ```
 
-Ten MCP tools, five SQLite tables, zero cloud — your memory stays on your disk.
+Thirteen MCP tools, five SQLite tables, zero cloud — your memory stays on your disk.
 
-### New in v1.4.0 — Pattern Oracle + Verification-Gated Memory
+### New in v1.5.0 — Trust Rebuild
+
+```
+   ┌─────────────────────────────────────────────────────────┐
+   │  Claude calls amplify_decisions(op="track", ...)        │
+   │  storage.addDecision() INSERTs the row, gets a rowid    │
+   │  ── NEW: SELECT WHERE id = rowid before returning ──    │
+   │  Row missing? → AmplifierWriteError + audit log entry   │
+   │  MCP returns:  "ERROR: Decision NOT recorded.           │
+   │                 Do not claim this was saved."           │
+   │  Claude can no longer hallucinate a successful save.    │
+   └─────────────────────────────────────────────────────────┘
+                            ↓
+   ┌─────────────────────────────────────────────────────────┐
+   │  Next session starts.                                   │
+   │  > amplify_context_load({ project: "my-api" })          │
+   │  ⚠️ Stale memory files — 1 newer than latest write      │
+   │     • 2026-05-26.md (3.2 KB, mtime 16:42 today)         │
+   │  Latest Amplifier write: 2026-05-26 11:05               │
+   │  Review with amplify_audit_freshness, then              │
+   │  amplify_decisions / amplify_learn for anything kept.   │
+   └─────────────────────────────────────────────────────────┘
+```
+
+**Four new tools land in v1.5.0:**
+
+- `amplify_audit_freshness` — list `memory/<date>.md` files newer than the latest Amplifier write, so unrecorded sessions surface for triage.
+- `amplify_suggest_pattern_key` — trigram-similarity scan of existing `pattern_key`s so two sessions don't invent two different keys for the same recurring lesson.
+- `amplify_promote_from_memory_md` — read a memory-hook log file and surface DRAFT lesson/decision suggestions based on three heuristics (architectural Wrote: lines, >50 events/hour, ≥8× repeated calls). Records nothing — the operator decides what to keep.
+- Assistant-side SessionEnd detection — the auto-claim hook now spots `"I was wrong about..."` admissions and long architecture writeups, not just user reactions like *"no, don't"*.
+
+Plus a quiet bug fix that matters for Finnish, Swedish, and other languages: `\b` in JavaScript regex doesn't fire around `ä` / `ö`, so patterns like `\bälä\b` silently failed for utterances starting with capital `Ä`. All non-ASCII patterns now use Unicode lookarounds.
+
+### Previously: v1.4.0 — Pattern Oracle + Verification-Gated Memory
 
 ```
    ┌─────────────────────────────────────────────────────────┐
@@ -163,6 +214,9 @@ Different products solve different shapes of "AI memory." This table is honest a
 | Preflight risk check before a task   | ✅ Pattern Oracle      | ❌                    | ❌                     | ❌                    | ❌                     |
 | Verification-gated (claim → confirmed)| ✅ (v1.4.0)           | ❌                    | ❌                     | ❌                    | ❌                     |
 | Cross-project pattern promotion      | ✅ (v1.4.0)            | ❌                    | partial (multi-user)  | ❌                    | ❌                     |
+| Write-verification (no fake IDs)     | ✅ (v1.5.0)            | ❌                    | ❌                     | ❌                    | ❌                     |
+| Stale-memory detection at boot       | ✅ (v1.5.0)            | ❌                    | ❌                     | ❌                    | ❌                     |
+| Pattern-key suggester (dedup helper) | ✅ (v1.5.0)            | ❌                    | ❌                     | ❌                    | ❌                     |
 | MCP-compatible out of the box        | ✅                     | ✅                    | ✅ (mem0-plugin)       | partial (via API)    | ✅                     |
 | CLI for setup / inspection / backup  | ✅                     | ❌                    | ❌ (SaaS dashboard)    | ❌ (web UI)           | varies                |
 
@@ -544,6 +598,48 @@ amplify_evidence_chain({ id: 42, kind: "decision" })
 ```
 
 Returns the full chain: original claim → each evidence link with type, link URL, who recorded it, and when → final status. Useful when you want to audit *why* the Oracle scored a task as high-risk.
+
+### `amplify_audit_freshness` — find unrecorded sessions (v1.5.0)
+
+```js
+amplify_audit_freshness({
+  project: "my-api",
+  // optional: explicit memory directory, defaults to <project>/memory
+  // memory_dir: "/path/to/memory"
+})
+```
+
+Lists `memory/<YYYY-MM-DD>.md` files whose mtime is newer than the latest write to this project's lessons or decisions. When a session ran for hours but never called `amplify_learn`, that work shows up here and you can triage it before it gets lost. Also surfaces automatically as a `⚠ Stale memory files` block at the bottom of `amplify_context_load` output, so the next session sees the warning without having to remember to check.
+
+### `amplify_suggest_pattern_key` — propose a pattern_key before recording (v1.5.0)
+
+```js
+amplify_suggest_pattern_key({
+  project: "my-api",
+  title: "Read API spec before integration",
+  description: "Don't guess endpoints, check the docs first."
+})
+```
+
+Returns up to three existing `pattern_key`s whose trigram Jaccard similarity against the new lesson clears 0.3, ranked by score, plus a freshly-coined kebab-case key if nothing matches. Call this before `amplify_learn` when you suspect a lesson recurs — it prevents two sessions from inventing two different keys (`read-docs-first` vs `check-spec-before-integration`) for the same recurring mistake and silently splitting the frequency counter.
+
+Known limitation: trigrams catch shared keywords and morphology, not pure synonyms. *verify* and *confirm* score far apart even when meaning is identical. Document your `pattern_key` choices so the next session knows the canonical form.
+
+### `amplify_promote_from_memory_md` — triage a forgotten day (v1.5.0)
+
+```js
+amplify_promote_from_memory_md({
+  memory_file: "/Users/me/.claude/memory/2026-05-26.md"
+})
+```
+
+Reads a memory-hook log file (the `### HH:MM — Tool / Terminal / Wrote: ...` format that some Claude Code setups write at every tool call) and returns DRAFT suggestions for `amplify_learn` / `amplify_decisions` follow-up calls. Three heuristics:
+
+- **Architectural Wrote: lines** — file paths containing `plan` / `decision` / `architecture` / `blueprint` / `manifesto` / `design` / `spec` / `adr` (singular or plural) become decision candidates.
+- **Intense activity windows** — any hour with >50 logged events becomes an insight candidate, since dense bursts usually mean something substantive happened.
+- **Repeated identical calls** — the same tool or terminal command issued ≥8 times in a session becomes a mistake candidate, since recurring identical calls usually mean a stuck loop or unresolved failure.
+
+Returns drafts only. Records nothing. The operator decides what's worth promoting.
 
 ### `amplify_global_patterns` — cross-project rules
 

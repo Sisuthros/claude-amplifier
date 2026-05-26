@@ -1,0 +1,17 @@
+{
+  "_purpose": "Example call to amplify_audit_freshness — surfaces memory/<date>.md files newer than the latest Amplifier write for a project. Use when you suspect a previous session did real work but forgot to record it as lessons/decisions.",
+  "tool": "amplify_audit_freshness",
+  "input": {
+    "project": "my-api"
+  },
+  "_alternate_input_when_memory_dir_is_custom": {
+    "project": "my-api",
+    "memory_dir": "/Users/me/.claude/memory"
+  },
+  "_alternate_input_with_project_path": {
+    "project_path": "/Users/me/projects/my-api",
+    "_note": "When you pass project_path instead of project, the final directory name becomes the project name and memory_dir defaults to <project_path>/memory."
+  },
+  "_typical_output_shape": "Stale memory files for project \"my-api\":\n  Memory dir: /Users/me/.claude/memory\n  Latest Amplifier write: 2026-05-25 23:56:29\n  Stale count: 1\n\nFiles (oldest first):\n  • 2026-05-26.md — 3.2 KB — mtime 2026-05-26T16:42:18.000Z\n\nNext step: open each file, decide what's worth keeping, and call amplify_learn / amplify_decisions retroactively.",
+  "_when_to_use": "Run after a long idle gap, when amplify_context_load shows the ⚠ Stale memory files block, or when you want to confirm that a recent session's lessons were actually recorded (and not just claimed)."
+}

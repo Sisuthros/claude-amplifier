@@ -1,0 +1,13 @@
+{
+  "_purpose": "Example call to amplify_suggest_pattern_key — find the canonical pattern_key for a recurring lesson before recording it. Prevents two sessions from inventing two different keys for the same lesson and splitting the frequency counter.",
+  "tool": "amplify_suggest_pattern_key",
+  "input": {
+    "project": "my-api",
+    "title": "Read Hermes API spec before integration",
+    "description": "Stop guessing endpoint parameters, check the documentation first."
+  },
+  "_typical_output_when_match_exists": "Existing pattern_keys for project \"my-api\" similar to \"Read Hermes API spec before integration\":\n\n  • \"read-docs-before-coding\" — similarity 0.412, frequency 3\n      example: Read NIM API docs first\n\nPick one of these if it actually describes the same recurring lesson. If none do, coin a new key (e.g. \"read-hermes-api-spec-before-integration\") rather than forcing a partial match.",
+  "_typical_output_when_no_match": "No existing pattern_key for project \"my-api\" scored above 0.3.\nSuggested NEW key: \"read-hermes-api-spec-before\"\n\nUse this key when calling amplify_learn, or pick your own. Reusing the same key across recurring lessons is what makes the frequency counter actually count.",
+  "_known_limitation": "Trigram Jaccard catches shared keywords and morphology (read/reading, docs/documentation) but does not catch pure synonyms. verify vs confirm score far apart even when the meaning is identical. Document your pattern_key choices so the next session knows the canonical form.",
+  "_when_to_use": "Call this before amplify_learn when you suspect the lesson is a recurring pattern, not a one-off. Especially useful when picking up a project after a break."
+}
