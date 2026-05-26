@@ -4,6 +4,80 @@ import path from "path";
 import fs from "fs";
 
 // ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/**
+ * v1.5.0 — Thrown when a write to SQLite reports success (an INSERT with a
+ * lastInsertRowid > 0) but the row cannot be read back. Past versions returned
+ * an undefined Lesson/Decision that callers happily stringified as
+ * `id: undefined`, producing fake "recorded" messages that looked like wins
+ * but persisted nothing.
+ *
+ * Surfaces a single audit trail at $HOME/.claude-amplifier/write-errors.jsonl
+ * so post-incident review can find why a session "remembered" things it never
+ * actually saved.
+ */
+export class AmplifierWriteError extends Error {
+  readonly project: string;
+  readonly table: "lessons" | "decisions";
+  readonly lastInsertRowid: number;
+  readonly title: string;
+
+  constructor(opts: {
+    table: "lessons" | "decisions";
+    project: string;
+    title: string;
+    lastInsertRowid: number;
+    cause?: string;
+  }) {
+    const reason =
+      opts.cause ??
+      `INSERT into ${opts.table} reported rowid=${opts.lastInsertRowid} ` +
+        `but a follow-up SELECT returned no row.`;
+    super(
+      `AmplifierWriteError: write to ${opts.table} did not persist ` +
+        `(project=${opts.project}, title="${opts.title}"). ${reason}`,
+    );
+    this.name = "AmplifierWriteError";
+    this.project = opts.project;
+    this.table = opts.table;
+    this.lastInsertRowid = opts.lastInsertRowid;
+    this.title = opts.title;
+  }
+}
+
+/**
+ * v1.5.0 — Append a single line to ~/.claude-amplifier/write-errors.jsonl.
+ * Never throws; logging must not turn an already-bad write into a second
+ * failure. The path can be overridden by AMPLIFIER_WRITE_ERRORS_LOG for tests.
+ */
+export function logWriteError(entry: {
+  table: string;
+  project: string;
+  title: string;
+  lastInsertRowid: number;
+  reason: string;
+}): void {
+  try {
+    const dir =
+      process.env.CLAUDE_AMPLIFIER_HOME ??
+      path.join(os.homedir(), ".claude-amplifier");
+    const logPath =
+      process.env.AMPLIFIER_WRITE_ERRORS_LOG ??
+      path.join(dir, "write-errors.jsonl");
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(
+      logPath,
+      JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n",
+      "utf8",
+    );
+  } catch {
+    // Intentional: don't cascade. Caller already has a real error to surface.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -424,7 +498,31 @@ export class SQLiteStore {
       evidence_links,
       confidence
     );
-    return this.getLessonById(info.lastInsertRowid as number)!;
+
+    // v1.5.0 — write-verification. Past versions trusted lastInsertRowid and
+    // used a non-null assertion (`!`) on getLessonById, which silently coerced
+    // undefined into a Lesson when read-back failed. That produced "Lesson
+    // recorded (id: undefined)" messages that looked successful but persisted
+    // nothing. Now we re-read and throw a typed error so the MCP layer can
+    // surface a real failure to Claude.
+    const rowid = Number(info.lastInsertRowid);
+    const persisted = this.getLessonById(rowid);
+    if (!persisted) {
+      logWriteError({
+        table: "lessons",
+        project: data.project,
+        title: data.title,
+        lastInsertRowid: rowid,
+        reason: "INSERT returned rowid but follow-up SELECT found no row",
+      });
+      throw new AmplifierWriteError({
+        table: "lessons",
+        project: data.project,
+        title: data.title,
+        lastInsertRowid: rowid,
+      });
+    }
+    return persisted;
   }
 
   getLessons(project: string, limit = 50): Lesson[] {
@@ -516,7 +614,25 @@ export class SQLiteStore {
       this.updateDecisionStatus(data.supersedes_id, "superseded");
     }
 
-    return this.getDecisionById(info.lastInsertRowid as number)!;
+    // v1.5.0 — write-verification (see addLesson for rationale).
+    const rowid = Number(info.lastInsertRowid);
+    const persisted = this.getDecisionById(rowid);
+    if (!persisted) {
+      logWriteError({
+        table: "decisions",
+        project: data.project,
+        title: data.title,
+        lastInsertRowid: rowid,
+        reason: "INSERT returned rowid but follow-up SELECT found no row",
+      });
+      throw new AmplifierWriteError({
+        table: "decisions",
+        project: data.project,
+        title: data.title,
+        lastInsertRowid: rowid,
+      });
+    }
+    return persisted;
   }
 
   /**

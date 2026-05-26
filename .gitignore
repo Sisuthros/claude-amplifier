@@ -21,3 +21,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# npm audit output captured during local pre-release checks
+npm-audit-*.txt

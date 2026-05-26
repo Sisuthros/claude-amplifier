@@ -1,6 +1,6 @@
 {
   "name": "claude-amplifier",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Persistent memory + decision tracking for Claude across sessions, via MCP. Stops Claude from re-explaining the same architectural choices every session.",
   "keywords": [
     "claude",

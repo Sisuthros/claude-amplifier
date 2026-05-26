@@ -27,7 +27,17 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export type SuggestionKind = "user_correction" | "rule_statement" | "success_confirm";
+export type SuggestionKind =
+  | "user_correction"
+  | "rule_statement"
+  | "success_confirm"
+  // v1.5.0 — assistant-side signals. The user-side patterns above catch
+  // reactions ("no, don't"); these catch the assistant declaring something
+  // worth remembering ("I was wrong about X", "this is a tier jump",
+  // architecture writeups long enough to deserve a decision row).
+  | "assistant_correction"
+  | "assistant_insight"
+  | "architecture_decision";
 
 export interface ClaimSuggestion {
   kind: SuggestionKind;
@@ -118,7 +128,9 @@ const CORRECTION_PATTERNS: Array<{ rx: RegExp; weight: number; sev: "low" | "med
   { rx: /\b(stop|halt|cancel)\b.{0,30}\b(that|doing|now)\b/i, weight: 2, sev: "medium" },
   { rx: /\b(you broke|you ruined|you trashed)\b/i, weight: 3, sev: "high" },
   { rx: /\b(not what i asked|wrong direction|missed the point)\b/i, weight: 2, sev: "medium" },
-  { rx: /\b(älä|ei niin|väärin|et ymmärrä)\b/i, weight: 2, sev: "medium" }, // Finnish corrections
+  // Finnish — \b doesn't fire around ä/ö in JS regex (ASCII word-boundary),
+  // so use Unicode lookarounds (\p{L} = any letter) instead.
+  { rx: /(?<![\p{L}\p{N}])(älä|ei niin|väärin|et ymmärrä)(?![\p{L}\p{N}])/iu, weight: 2, sev: "medium" },
 ];
 
 /** Words / phrases that signal the user is stating an enduring rule. */
@@ -127,7 +139,7 @@ const RULE_PATTERNS: Array<{ rx: RegExp; weight: number; sev: "low" | "medium" |
   { rx: /\b(never|do not ever|don'?t ever)\b.{3,120}/i, weight: 3, sev: "high" },
   { rx: /\b(rule|sääntö)\s*[:#]/i, weight: 3, sev: "medium" },
   { rx: /\bfrom now on\b.{3,120}/i, weight: 2, sev: "medium" },
-  { rx: /\b(aina|älä koskaan)\b.{3,120}/i, weight: 2, sev: "medium" }, // Finnish rules
+  { rx: /(?<![\p{L}\p{N}])(aina|älä koskaan)(?![\p{L}\p{N}]).{3,120}/iu, weight: 2, sev: "medium" },
 ];
 
 /** Words / phrases that signal the user confirms success. */
@@ -135,7 +147,36 @@ const SUCCESS_PATTERNS: Array<{ rx: RegExp; weight: number; sev: "low" | "medium
   { rx: /\b(perfect|exactly|that worked|works now|fixed it)\b/i, weight: 3, sev: "medium" },
   { rx: /\b(great|nice|excellent|nailed it)\b.{0,40}(keep|continue|next)\b/i, weight: 2, sev: "low" },
   { rx: /\b(ship it|merge it|land it|lgtm|looks good)\b/i, weight: 3, sev: "medium" },
-  { rx: /\b(juuri näin|toimii|hyvä|loistava)\b/i, weight: 2, sev: "low" }, // Finnish success
+  { rx: /(?<![\p{L}\p{N}])(juuri näin|toimii|hyvä|loistava)(?![\p{L}\p{N}])/iu, weight: 2, sev: "low" },
+];
+
+// v1.5.0 — assistant-side patterns.
+
+/** Assistant explicitly admits a mistake. */
+const ASSISTANT_CORRECTION_PATTERNS: Array<{ rx: RegExp; weight: number; sev: "low" | "medium" | "high" }> = [
+  { rx: /\b(i was wrong|i'?m wrong|my mistake|i misread)\b/i, weight: 3, sev: "high" },
+  { rx: /\b(i'?ll correct|let me correct|correcting that)\b/i, weight: 2, sev: "medium" },
+  { rx: /(?<![\p{L}\p{N}])(rikoin sääntö|olin väärässä|tämä on toistuva virhe)(?![\p{L}\p{N}])/iu, weight: 3, sev: "high" },
+];
+
+/** Assistant flags an insight worth remembering. */
+const ASSISTANT_INSIGHT_PATTERNS: Array<{ rx: RegExp; weight: number; sev: "low" | "medium" | "high" }> = [
+  { rx: /\bthis is a (tier|step|level) (jump|change)\b/i, weight: 3, sev: "medium" },
+  { rx: /\b(rare|unusual|first time i'?ve seen)\b.{3,80}/i, weight: 2, sev: "medium" },
+  { rx: /\bkey (finding|insight|takeaway|lesson)\b/i, weight: 2, sev: "medium" },
+  { rx: /(?<![\p{L}\p{N}])(tason hyppy|harvinaista|ensimmäinen kerta)(?![\p{L}\p{N}])/iu, weight: 3, sev: "medium" },
+  { rx: /(?<![\p{L}\p{N}])(tärkeä havainto|tärkeä löytö|tärkeä oppi)(?![\p{L}\p{N}])/iu, weight: 2, sev: "medium" },
+];
+
+/** Assistant produces a long writeup that looks decision-shaped. */
+const ARCHITECTURE_KEYWORDS = /\b(architecture|gateway|service|port|schema|migration|api|endpoint|pipeline|workflow|deployment|integration)\b/i;
+const DECISION_STRUCTURE_PATTERNS: Array<{ rx: RegExp; weight: number; sev: "low" | "medium" | "high" }> = [
+  // The presence of "next step:" / "rationale:" / "trade-off:" alongside
+  // architecture vocabulary is a strong signal that the assistant just
+  // produced something that belongs in amplify_decisions(track).
+  { rx: /\b(next step|outcome check-in|rationale|trade-?offs?)\s*[:#]/i, weight: 3, sev: "medium" },
+  { rx: /\b(decision|choice|approach):/i, weight: 2, sev: "low" },
+  { rx: /\b(seuraava askel|perustelu|trade-off)\s*[:#]/i, weight: 3, sev: "medium" }, // Finnish
 ];
 
 interface RawHit {
@@ -162,13 +203,24 @@ const TYPE_BY_KIND: Record<SuggestionKind, ClaimSuggestion["type"]> = {
   user_correction: "mistake",
   rule_statement: "insight",
   success_confirm: "success",
+  assistant_correction: "mistake",
+  assistant_insight: "insight",
+  architecture_decision: "insight", // becomes a decision via tools.ts mapping
 };
 
 const TAGS_BY_KIND: Record<SuggestionKind, string[]> = {
   user_correction: ["session-end", "user-correction"],
   rule_statement: ["session-end", "rule"],
   success_confirm: ["session-end", "success"],
+  assistant_correction: ["session-end", "assistant-correction"],
+  assistant_insight: ["session-end", "assistant-insight"],
+  architecture_decision: ["session-end", "decision-candidate"],
 };
+
+// v1.5.0 — minimum assistant-message length to be considered for the
+// "architecture writeup" signal. 600 chars ≈ ~150 tokens. Anything shorter
+// is probably a one-liner answer, not a tier-jump explanation.
+const MIN_ASSISTANT_LENGTH_FOR_DECISION = 600;
 
 export function analyzeTranscript(jsonl: string, opts: AnalyzeOptions = {}): ClaimSuggestion[] {
   const maxSuggestions = opts.maxSuggestions ?? 3;
@@ -180,14 +232,33 @@ export function analyzeTranscript(jsonl: string, opts: AnalyzeOptions = {}): Cla
   const hits: RawHit[] = [];
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
-    if (t.role !== "user") continue;
     if (t.text.length < minLen) continue;
-    const corr = scanTurn(t.text, "user_correction", CORRECTION_PATTERNS);
-    if (corr) hits.push({ ...corr, turnIndex: i });
-    const rule = scanTurn(t.text, "rule_statement", RULE_PATTERNS);
-    if (rule) hits.push({ ...rule, turnIndex: i });
-    const succ = scanTurn(t.text, "success_confirm", SUCCESS_PATTERNS);
-    if (succ) hits.push({ ...succ, turnIndex: i });
+    if (t.role === "user") {
+      const corr = scanTurn(t.text, "user_correction", CORRECTION_PATTERNS);
+      if (corr) hits.push({ ...corr, turnIndex: i });
+      const rule = scanTurn(t.text, "rule_statement", RULE_PATTERNS);
+      if (rule) hits.push({ ...rule, turnIndex: i });
+      const succ = scanTurn(t.text, "success_confirm", SUCCESS_PATTERNS);
+      if (succ) hits.push({ ...succ, turnIndex: i });
+    } else if (t.role === "assistant") {
+      // v1.5.0 — assistant-side detection. Catches "I was wrong", "this is a
+      // tier jump", and long architecture writeups that should become
+      // decisions.
+      const ac = scanTurn(t.text, "assistant_correction", ASSISTANT_CORRECTION_PATTERNS);
+      if (ac) hits.push({ ...ac, turnIndex: i });
+      const ai = scanTurn(t.text, "assistant_insight", ASSISTANT_INSIGHT_PATTERNS);
+      if (ai) hits.push({ ...ai, turnIndex: i });
+
+      // Decision candidate: long assistant message with architecture vocab
+      // AND structural markers like "next step:" / "rationale:" / "trade-off:".
+      if (
+        t.text.length >= MIN_ASSISTANT_LENGTH_FOR_DECISION &&
+        ARCHITECTURE_KEYWORDS.test(t.text)
+      ) {
+        const ds = scanTurn(t.text, "architecture_decision", DECISION_STRUCTURE_PATTERNS);
+        if (ds) hits.push({ ...ds, turnIndex: i });
+      }
+    }
   }
 
   if (hits.length === 0) return [];
@@ -250,5 +321,11 @@ function deriveTitle(kind: SuggestionKind, text: string): string {
       return `Rule: ${head}`;
     case "success_confirm":
       return `Confirmed working: ${head}`;
+    case "assistant_correction":
+      return `Assistant correction: ${head}`;
+    case "assistant_insight":
+      return `Insight: ${head}`;
+    case "architecture_decision":
+      return `Decision candidate: ${head}`;
   }
 }

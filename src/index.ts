@@ -29,6 +29,10 @@ import {
   handleVerifyClaim,
   handlePromotePattern,
   handleEvidenceChain,
+  // v1.5.0
+  handleAuditFreshness,
+  handleSuggestPatternKey,
+  handlePromoteFromMemoryMd,
 } from "./tools.js";
 import { bootstrap } from "./bootstrap.js";
 
@@ -442,6 +446,60 @@ const TOOLS = [
       required: ["id"],
     },
   },
+  {
+    name: "amplify_promote_from_memory_md",
+    description:
+      "v1.5.0 — Read a memory/<YYYY-MM-DD>.md file and surface DRAFT suggestions for amplify_learn / amplify_decisions follow-up calls. Heuristics: architectural Wrote: lines (plan/decision/architecture/blueprint/manifesto), >50 events per hour, ≥8× repeated tool/terminal calls. Returns drafts only — never writes to SQLite. Use when amplify_audit_freshness flagged a stale day worth triaging.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memory_file: {
+          type: "string",
+          description:
+            "Absolute path to a memory/<YYYY-MM-DD>.md file (or any file in the same format).",
+        },
+      },
+      required: ["memory_file"],
+    },
+  },
+  {
+    name: "amplify_suggest_pattern_key",
+    description:
+      "v1.5.0 — Suggest an existing pattern_key (or propose a new one) for a lesson before recording it. Use this before amplify_learn when you suspect the lesson is a recurring pattern. Prevents the failure where two sessions invent two different keys for the same lesson and the frequency counter never aggregates. Returns up to 3 existing keys ranked by trigram similarity, or a new key suggestion if none clear the threshold.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Project name." },
+        title: { type: "string", description: "The lesson title you intend to record." },
+        description: { type: "string", description: "The lesson description (helps disambiguate)." },
+      },
+      required: ["project", "title", "description"],
+    },
+  },
+  {
+    name: "amplify_audit_freshness",
+    description:
+      "v1.5.0 — List memory/<YYYY-MM-DD>.md files that are newer than the latest Amplifier write for a project. Use this when amplify_context_load surfaces a stale-memory warning, or when you suspect a previous session did real work without recording lessons/decisions. Surfaces unrecorded sessions so they can be triaged retroactively.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Project name. Use this OR project_path.",
+        },
+        project_path: {
+          type: "string",
+          description:
+            "Absolute path to the project root; the final directory name is used as the project name. If memory_dir is omitted, defaults to <project_path>/memory.",
+        },
+        memory_dir: {
+          type: "string",
+          description:
+            "Optional explicit memory directory. Defaults to <project_path>/memory or $HOME/.claude/memory.",
+        },
+      },
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -456,7 +514,7 @@ async function runMcpServer(): Promise<void> {
   process.stderr.write(summary + "\n");
 
   const server = new Server(
-    { name: "claude-amplifier", version: "1.4.0" },
+    { name: "claude-amplifier", version: "1.5.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -503,6 +561,16 @@ async function runMcpServer(): Promise<void> {
           break;
         case "amplify_evidence_chain":
           text = await handleEvidenceChain(store, args as Record<string, unknown>);
+          break;
+        // v1.5.0
+        case "amplify_audit_freshness":
+          text = await handleAuditFreshness(store, args as Record<string, unknown>);
+          break;
+        case "amplify_suggest_pattern_key":
+          text = await handleSuggestPatternKey(store, args as Record<string, unknown>);
+          break;
+        case "amplify_promote_from_memory_md":
+          text = await handlePromoteFromMemoryMd(store, args as Record<string, unknown>);
           break;
         default:
           text = `Error: unknown tool '${name}'.`;

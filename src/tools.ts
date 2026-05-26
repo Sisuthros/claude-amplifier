@@ -1,4 +1,20 @@
-import { SQLiteStore, Lesson, Decision, Pattern } from "./storage.js";
+import {
+  SQLiteStore,
+  Lesson,
+  Decision,
+  Pattern,
+  AmplifierWriteError,
+} from "./storage.js";
+import {
+  freshnessReport,
+  formatFreshnessWarning,
+  type FreshnessReport,
+} from "./freshness.js";
+import { suggestPatternKey } from "./pattern_suggest.js";
+import {
+  analyzeMemoryFile,
+  formatPromotionReport,
+} from "./promote_memory.js";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -220,19 +236,36 @@ export async function handleLearn(
     return `Error: 'severity' must be one of: ${validSeverities.join(", ")}`;
   }
 
-  const lesson = store.addLesson({
-    project,
-    type: type as Lesson["type"],
-    title,
-    description,
-    context: context || undefined,
-    resolution: resolution || undefined,
-    prevention: prevention || undefined,
-    severity: severity as Lesson["severity"],
-    tags: parseTags(tags),
-    trigger: trigger || undefined,
-    pattern_key: pattern_key || undefined,
-  });
+  let lesson: Lesson;
+  try {
+    lesson = store.addLesson({
+      project,
+      type: type as Lesson["type"],
+      title,
+      description,
+      context: context || undefined,
+      resolution: resolution || undefined,
+      prevention: prevention || undefined,
+      severity: severity as Lesson["severity"],
+      tags: parseTags(tags),
+      trigger: trigger || undefined,
+      pattern_key: pattern_key || undefined,
+    });
+  } catch (err) {
+    // v1.5.0 — surface real failures to Claude instead of letting MCP crash
+    // or returning a fake success. AmplifierWriteError signals an INSERT that
+    // did not persist; any other error is unexpected but worth reporting
+    // verbatim so the user can diagnose.
+    if (err instanceof AmplifierWriteError) {
+      return (
+        `ERROR: Lesson NOT recorded. ${err.message}\n` +
+        `  See ~/.claude-amplifier/write-errors.jsonl for the audit entry.\n` +
+        `  Do not claim this lesson was saved. Retry the call or report the issue.`
+      );
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return `ERROR: Lesson NOT recorded — ${msg}. Do not claim this lesson was saved.`;
+  }
 
   const freqNote =
     lesson.frequency && lesson.frequency > 1
@@ -282,28 +315,41 @@ export async function handleDecisions(
       if (!title) return "Error: 'title' is required for op=track.";
       if (!description) return "Error: 'description' is required for op=track.";
 
-      const decision = store.addDecision({
-        project,
-        category,
-        title,
-        description,
-        rationale: rationale || undefined,
-        tags: parseTags(tags),
-        status: "active",
-        outcome_check_in: outcome_check_in || undefined,
-        restore_step: restore_step || undefined,
-        next_step: next_step || undefined,
-        blocked_on: blocked_on || undefined,
-        trade_offs: Array.isArray(trade_offs) ? (trade_offs as string[]) : undefined,
-        alternatives_considered: Array.isArray(alternatives_considered)
-          ? (alternatives_considered as string[])
-          : undefined,
-        supersedes_id: supersedes ? Number(supersedes) : undefined,
-        related_decision_ids:
-          relations && typeof relations === "object"
-            ? (relations as Decision["related_decision_ids"])
+      let decision: Decision;
+      try {
+        decision = store.addDecision({
+          project,
+          category,
+          title,
+          description,
+          rationale: rationale || undefined,
+          tags: parseTags(tags),
+          status: "active",
+          outcome_check_in: outcome_check_in || undefined,
+          restore_step: restore_step || undefined,
+          next_step: next_step || undefined,
+          blocked_on: blocked_on || undefined,
+          trade_offs: Array.isArray(trade_offs) ? (trade_offs as string[]) : undefined,
+          alternatives_considered: Array.isArray(alternatives_considered)
+            ? (alternatives_considered as string[])
             : undefined,
-      });
+          supersedes_id: supersedes ? Number(supersedes) : undefined,
+          related_decision_ids:
+            relations && typeof relations === "object"
+              ? (relations as Decision["related_decision_ids"])
+              : undefined,
+        });
+      } catch (err) {
+        if (err instanceof AmplifierWriteError) {
+          return (
+            `ERROR: Decision NOT recorded. ${err.message}\n` +
+            `  See ~/.claude-amplifier/write-errors.jsonl for the audit entry.\n` +
+            `  Do not claim this decision was saved. Retry the call or report the issue.`
+          );
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        return `ERROR: Decision NOT recorded — ${msg}. Do not claim this decision was saved.`;
+      }
 
       const extras: string[] = [];
       if (decision.outcome_check_in)
@@ -613,7 +659,159 @@ export async function handleContextLoad(
     );
   }
 
+  // v1.5.0 — stale-memory warning. If memory/<date>.md files exist newer
+  // than the latest Amplifier write, surface them at the bottom of the
+  // session-start context so the operator (or the assistant) can decide
+  // whether to retroactively record what happened.
+  try {
+    const report = freshnessReport(store, projectName, {
+      project_path: project_path ? String(project_path) : undefined,
+    });
+    const warning = formatFreshnessWarning(report);
+    if (warning) sections.push(warning);
+  } catch {
+    // Freshness check is best-effort. A broken memory dir must never break
+    // the rest of context_load.
+  }
+
   return sections.join("\n");
+}
+
+/**
+ * amplify_audit_freshness — v1.5.0 — list memory/<date>.md files that are
+ * newer than the latest Amplifier write for a project. Surfaces unrecorded
+ * sessions so the operator can retroactively call amplify_learn /
+ * amplify_decisions for things worth keeping.
+ */
+export async function handleAuditFreshness(
+  store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const { project, project_path, memory_dir } = args as Record<string, string>;
+
+  let projectName = String(project || "");
+  if (!projectName && project_path) {
+    const parts = String(project_path).replace(/\\/g, "/").split("/");
+    projectName = parts.filter(Boolean).pop() || "";
+  }
+  if (!projectName) {
+    return "Error: provide 'project' or 'project_path'.";
+  }
+
+  let report: FreshnessReport;
+  try {
+    report = freshnessReport(store, projectName, {
+      memory_dir: memory_dir || undefined,
+      project_path: project_path || undefined,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Error: freshness check failed — ${msg}`;
+  }
+
+  if (report.memory_dir_missing) {
+    return [
+      `Memory directory not found: ${report.memory_dir}`,
+      `(Nothing to audit. This is normal for projects without a memory/ hook.)`,
+    ].join("\n");
+  }
+
+  if (report.stale_files.length === 0) {
+    return [
+      `✓ All memory files for project "${projectName}" are older than the latest Amplifier write.`,
+      `  Latest Amplifier write: ${report.latest_amplifier_write ?? "(none yet)"}`,
+      `  Memory dir scanned: ${report.memory_dir}`,
+    ].join("\n");
+  }
+
+  const lines: string[] = [
+    `Stale memory files for project "${projectName}":`,
+    `  Memory dir: ${report.memory_dir}`,
+    report.latest_amplifier_write
+      ? `  Latest Amplifier write: ${report.latest_amplifier_write}`
+      : `  Latest Amplifier write: (none — all memory files unrecorded)`,
+    `  Stale count: ${report.stale_files.length}`,
+    "",
+    "Files (oldest first):",
+  ];
+  for (const f of report.stale_files) {
+    const kb = (f.size_bytes / 1024).toFixed(1);
+    lines.push(`  • ${f.date}.md — ${kb} KB — mtime ${f.mtime}`);
+  }
+  lines.push(
+    "",
+    "Next step: open each file, decide what's worth keeping, and call amplify_learn / amplify_decisions retroactively.",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * amplify_suggest_pattern_key — v1.5.0 — propose existing pattern_keys (or
+ * a new one) for a lesson before it is recorded. Helps prevent the
+ * "two sessions invent two different keys for the same lesson" failure mode.
+ */
+export async function handleSuggestPatternKey(
+  store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const { project, title, description } = args as Record<string, string>;
+
+  if (!project) return "Error: 'project' is required.";
+  if (!title) return "Error: 'title' is required.";
+  if (!description) return "Error: 'description' is required.";
+
+  const result = suggestPatternKey(store, project, title, description);
+
+  if (result.matches.length === 0) {
+    return [
+      `No existing pattern_key for project "${project}" scored above ${result.min_similarity}.`,
+      `Suggested NEW key: "${result.proposed_new_key}"`,
+      "",
+      `Use this key when calling amplify_learn, or pick your own. Reusing the same key`,
+      `across recurring lessons is what makes the frequency counter actually count.`,
+    ].join("\n");
+  }
+
+  const lines: string[] = [
+    `Existing pattern_keys for project "${project}" similar to "${title}":`,
+    "",
+  ];
+  for (const m of result.matches) {
+    lines.push(
+      `  • "${m.pattern_key}" — similarity ${m.similarity}, frequency ${m.existing_frequency}`,
+      `      example: ${m.example_title}`,
+    );
+  }
+  lines.push(
+    "",
+    `Pick one of these if it actually describes the same recurring lesson. If none do,`,
+    `coin a new key (e.g. "${result.proposed_new_key ?? "your-new-key"}") rather than forcing a partial match.`,
+  );
+  return lines.join("\n");
+}
+
+/**
+ * amplify_promote_from_memory_md — v1.5.0 — read a memory/<YYYY-MM-DD>.md
+ * file, run heuristic detection (architectural Wrote: lines, intense
+ * activity windows, repeated calls), and return DRAFT suggestions.
+ * Never writes to SQLite — the operator decides which drafts deserve
+ * amplify_learn / amplify_decisions follow-up calls.
+ */
+export async function handlePromoteFromMemoryMd(
+  _store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const { memory_file } = args as Record<string, string>;
+  if (!memory_file) {
+    return "Error: 'memory_file' is required (absolute path to a memory/<date>.md file).";
+  }
+  try {
+    const report = analyzeMemoryFile(memory_file);
+    return formatPromotionReport(report);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Error: could not analyze memory file — ${msg}`;
+  }
 }
 
 /**
