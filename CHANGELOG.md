@@ -2,6 +2,25 @@
 
 All notable changes to Claude Amplifier are documented here.
 
+## [1.5.3] — 2026-06-05 — Official MCP Registry
+
+Publishes Claude Amplifier to the [official MCP Registry](https://registry.modelcontextprotocol.io).
+No code or tool signatures changed from 1.5.2 — this release only corrects the
+registry namespace casing so the package can be verified and listed.
+
+### Fixed
+
+- **`mcpName` namespace casing** corrected to `io.github.Sisuthros/claude-amplifier`
+  (capital `S`, matching the GitHub account). The registry's namespace
+  authentication is case-sensitive; the previous lowercase value was rejected
+  with HTTP 403. `package.json` and `server.json` now agree on the exact name.
+
+### Added
+
+- **`server.json`** — registry manifest pointing at the npm package
+  (`registryType: npm`, `transport: stdio`, no spurious env vars). Validated
+  against the `2025-12-11` registry schema.
+
 ## [1.5.2] — 2026-06-05 — Trust everywhere
 
 Extends the write-verification guarantee from inserts to **every** mutation,

@@ -30,3 +30,6 @@ npm-audit-*.txt
 # Keep the dir + its README; ignore the generated outputs.
 knowledge/*
 !knowledge/README.md
+
+# local registry-publisher binary + auth artifacts (never commit)
+.tools/

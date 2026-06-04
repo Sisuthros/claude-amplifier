@@ -1,7 +1,7 @@
 {
   "name": "claude-amplifier",
-  "version": "1.5.2",
-  "mcpName": "io.github.sisuthros/claude-amplifier",
+  "version": "1.5.3",
+  "mcpName": "io.github.Sisuthros/claude-amplifier",
   "description": "Persistent memory + decision tracking for Claude across sessions, via MCP. Stops Claude from re-explaining the same architectural choices every session.",
   "keywords": [
     "claude",
