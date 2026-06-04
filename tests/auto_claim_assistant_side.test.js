@@ -36,7 +36,7 @@ describe("assistant_correction detection (v1.5.0)", () => {
       { role: "user", text: "Is the new token already deployed everywhere?" },
       {
         role: "assistant",
-        text: "Actually, I was wrong — the new token only landed on Hetzner, not WSL2 yet.",
+        text: "Actually, I was wrong — the new token only landed on staging, not production yet.",
       },
     ]);
     const out = analyzeTranscript(tx);
@@ -51,7 +51,7 @@ describe("assistant_correction detection (v1.5.0)", () => {
       { role: "user", text: "Mitkä kaikki paikat tämä kattaa?" },
       {
         role: "assistant",
-        text: "Olin väärässä — token ei mennyt WSL2:een ollenkaan, vain Hetzneriin.",
+        text: "Olin väärässä — token ei mennyt productioniin ollenkaan, vain stagingiin.",
       },
     ]);
     const out = analyzeTranscript(tx);
