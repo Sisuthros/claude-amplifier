@@ -1,8 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Email Us
-    url: mailto:lumen.myllyniemi@gmail.com
-    about: For general inquiries, consulting, or anything not covered above.
-  - name: SuperLumen
-    url: https://superlumen.vercel.app/
-    about: Visit our homepage for more information.
+  - name: Discussions
+    url: https://github.com/Sisuthros/claude-amplifier/discussions
+    about: Questions, ideas, and general discussion — please use Discussions instead of opening an issue.
