@@ -48,6 +48,46 @@ export class AmplifierWriteError extends Error {
 }
 
 /**
+ * P0 #5 — Thrown when a NON-INSERT mutation (UPDATE) reports success but did
+ * not actually change the intended row: either the rowcount came back 0 (the
+ * target id does not exist) or the post-mutation read-back found no row.
+ *
+ * v1.5.0 closed this gap for INSERTs via AmplifierWriteError; the mutation
+ * paths (frequency-bump, updateOutcomeStatus, updateDecisionStatus,
+ * updateDecision, linkDecisions, verifyLesson, demoteLesson) previously
+ * returned `void`/an object with no rowcount check, so a mutation targeting a
+ * vanished or non-existent row reported a fake success. This error makes the
+ * MCP layer surface a real failure instead.
+ *
+ * Shares the same write-errors.jsonl audit trail as AmplifierWriteError.
+ */
+export class AmplifierMutationError extends Error {
+  readonly operation: string;
+  readonly table: "lessons" | "decisions";
+  readonly id: number;
+
+  constructor(opts: {
+    operation: string;
+    table: "lessons" | "decisions";
+    id: number;
+    cause?: string;
+  }) {
+    const reason =
+      opts.cause ??
+      `UPDATE on ${opts.table} id=${opts.id} did not change any row ` +
+        `(0 rows affected — the target id likely does not exist).`;
+    super(
+      `AmplifierMutationError: ${opts.operation} on ${opts.table} id=${opts.id} ` +
+        `did not persist. ${reason}`,
+    );
+    this.name = "AmplifierMutationError";
+    this.operation = opts.operation;
+    this.table = opts.table;
+    this.id = opts.id;
+  }
+}
+
+/**
  * v1.5.0 — Append a single line to ~/.claude-amplifier/write-errors.jsonl.
  * Never throws; logging must not turn an already-bad write into a second
  * failure. The path can be overridden by AMPLIFIER_WRITE_ERRORS_LOG for tests.
@@ -190,6 +230,32 @@ export interface PatternPromotion {
   total_frequency: number;
 }
 
+/**
+ * v1.5.2 — a promoted (global) pattern projected as a cross-project preflight
+ * signal. Carries just enough of the supporting lessons (excluding the asking
+ * project's own rows) for the Pattern Oracle to score it, plus the confirmation
+ * strength so weak/unconfirmed signals can be downweighted.
+ */
+export interface PromotedPatternSignal {
+  pattern_key: string;
+  /** Representative title of the supporting lessons (highest-frequency one). */
+  title: string;
+  /** Sum of frequency across the cross-project supporting lessons. */
+  total_frequency: number;
+  /** How many supporting lessons are verification_status='confirmed'. */
+  confirmed_count: number;
+  /** Distinct source projects (excluding the asking project). */
+  source_count: number;
+  /** Strongest verification_status across supporting lessons. */
+  best_status: "claim" | "evidence" | "confirmed";
+  /** Confidence of the strongest supporting lesson. */
+  best_confidence: number;
+  /** Most-recent updated_at across supporting lessons. */
+  last_seen: string;
+  /** Concatenated searchable text of the supporting lessons. */
+  text: string;
+}
+
 export interface Pattern {
   id: number;
   title: string;
@@ -299,6 +365,11 @@ interface LessonExistenceRow {
 
 function now(): string {
   return new Date().toISOString().replace("T", " ").split(".")[0];
+}
+
+/** Ordinal rank of a verification status (higher = stronger). */
+function statusRank(s: "claim" | "evidence" | "confirmed" | undefined): number {
+  return s === "confirmed" ? 3 : s === "evidence" ? 2 : s === "claim" ? 1 : 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -580,10 +651,31 @@ export class SQLiteStore {
     }
 
     if (existing) {
-      this.db.prepare(
+      // P0 #5 — verify the frequency-bump actually landed. The previous code
+      // used a non-null assertion on getLessonById, silently coercing undefined
+      // into a Lesson if the row vanished between the existence check and the
+      // read-back — the same fake-success class v1.5.0 fixed on the INSERT path.
+      const bump = this.db.prepare(
         `UPDATE lessons SET frequency = frequency + 1, updated_at = ? WHERE id = ?`
       ).run(ts, existing.id);
-      return this.getLessonById(existing.id)!;
+      const persisted =
+        bump.changes >= 1 ? this.getLessonById(existing.id) : undefined;
+      if (!persisted) {
+        logWriteError({
+          table: "lessons",
+          project: data.project,
+          title: data.title,
+          lastInsertRowid: existing.id,
+          reason:
+            "frequency-bump UPDATE changed 0 rows or read-back found no row",
+        });
+        throw new AmplifierMutationError({
+          operation: "addLesson:frequencyBump",
+          table: "lessons",
+          id: existing.id,
+        });
+      }
+      return persisted;
     }
 
     // v1.4.0 defaults: pre-existing 1.3.x rows are confirmed; new claims
@@ -712,55 +804,77 @@ export class SQLiteStore {
             ? 0.7
             : 0.5;
 
-    const info = this.db.prepare(`
-      INSERT INTO decisions
-        (project, category, title, description, rationale, tags, status,
-         created_at, updated_at,
-         outcome_check_in, outcome_status, restore_step, next_step, blocked_on,
-         trade_offs, alternatives_considered, supersedes_id, relations,
-         verification_status, evidence_links, confidence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      data.project, data.category, data.title, data.description,
-      data.rationale ?? null, JSON.stringify(data.tags), data.status, ts, ts,
-      data.outcome_check_in ?? null,
-      data.outcome_check_in ? "pending" : null,
-      data.restore_step ?? null,
-      data.next_step ?? null,
-      data.blocked_on ?? null,
-      JSON.stringify(data.trade_offs ?? []),
-      JSON.stringify(data.alternatives_considered ?? []),
-      data.supersedes_id ?? null,
-      JSON.stringify(data.related_decision_ids ?? {}),
-      verification_status,
-      evidence_links,
-      confidence
-    );
+    // P0 #4 — atomicity. The INSERT, the supersede-old mutation, and the
+    // post-INSERT read-back (write-verification) must succeed or fail together.
+    // Before this, they were three unguarded statements: a failure in the
+    // supersede or read-back could leave the old decision flipped to
+    // "superseded" while the new one never persisted (or vice-versa). Wrapping
+    // them in a single better-sqlite3 transaction means any throw inside the
+    // body rolls the whole thing back — including the read-back failure that
+    // raises AmplifierWriteError. The transaction's return value is the
+    // verified-persisted new decision.
+    const insertAndVerify = this.db.transaction((): Decision => {
+      const info = this.db.prepare(`
+        INSERT INTO decisions
+          (project, category, title, description, rationale, tags, status,
+           created_at, updated_at,
+           outcome_check_in, outcome_status, restore_step, next_step, blocked_on,
+           trade_offs, alternatives_considered, supersedes_id, relations,
+           verification_status, evidence_links, confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        data.project, data.category, data.title, data.description,
+        data.rationale ?? null, JSON.stringify(data.tags), data.status, ts, ts,
+        data.outcome_check_in ?? null,
+        data.outcome_check_in ? "pending" : null,
+        data.restore_step ?? null,
+        data.next_step ?? null,
+        data.blocked_on ?? null,
+        JSON.stringify(data.trade_offs ?? []),
+        JSON.stringify(data.alternatives_considered ?? []),
+        data.supersedes_id ?? null,
+        JSON.stringify(data.related_decision_ids ?? {}),
+        verification_status,
+        evidence_links,
+        confidence
+      );
 
-    // If this decision supersedes another, mark the older one and link reverse.
-    if (data.supersedes_id) {
-      this.updateDecisionStatus(data.supersedes_id, "superseded");
-    }
+      // If this decision supersedes another, mark the older one. A throw here
+      // (e.g. a stubbed/failing mutation in tests, or a real DB error) aborts
+      // the transaction and rolls back the INSERT above. Note: an UPDATE that
+      // matches zero rows (superseding a non-existent id) is NOT an error and
+      // legitimately commits the new decision — hence requireExists: false, so
+      // the P0 #5 rowcount guard does not fire on this internal call.
+      if (data.supersedes_id) {
+        this.updateDecisionStatus(data.supersedes_id, "superseded", {
+          requireExists: false,
+        });
+      }
 
-    // v1.5.0 — write-verification (see addLesson for rationale).
-    const rowid = safeRowid(info.lastInsertRowid);
-    const persisted = this.getDecisionById(rowid);
-    if (!persisted) {
-      logWriteError({
-        table: "decisions",
-        project: data.project,
-        title: data.title,
-        lastInsertRowid: rowid,
-        reason: "INSERT returned rowid but follow-up SELECT found no row",
-      });
-      throw new AmplifierWriteError({
-        table: "decisions",
-        project: data.project,
-        title: data.title,
-        lastInsertRowid: rowid,
-      });
-    }
-    return persisted;
+      // v1.5.0 — write-verification (see addLesson for rationale). Performed
+      // INSIDE the transaction so a read-back failure rolls back BOTH the
+      // INSERT and the supersede mutation — no partial state escapes.
+      const rowid = safeRowid(info.lastInsertRowid);
+      const persisted = this.getDecisionById(rowid);
+      if (!persisted) {
+        logWriteError({
+          table: "decisions",
+          project: data.project,
+          title: data.title,
+          lastInsertRowid: rowid,
+          reason: "INSERT returned rowid but follow-up SELECT found no row",
+        });
+        throw new AmplifierWriteError({
+          table: "decisions",
+          project: data.project,
+          title: data.title,
+          lastInsertRowid: rowid,
+        });
+      }
+      return persisted;
+    });
+
+    return insertAndVerify();
   }
 
   /**
@@ -787,9 +901,19 @@ export class SQLiteStore {
   }
 
   updateOutcomeStatus(id: number, status: "pending" | "validated" | "failed"): void {
-    this.db.prepare(
+    const info = this.db.prepare(
       `UPDATE decisions SET outcome_status = ?, updated_at = ? WHERE id = ?`
     ).run(status, now(), id);
+    // P0 #5 — a 0-row UPDATE means the id doesn't exist. Previously this
+    // returned void unconditionally, so the handler reported "outcome marked
+    // as validated" for a decision that was never touched.
+    if (info.changes < 1) {
+      throw new AmplifierMutationError({
+        operation: "updateOutcomeStatus",
+        table: "decisions",
+        id,
+      });
+    }
   }
 
   private isOutcomeOverdue(checkIn: string, createdAt: string): boolean {
@@ -829,10 +953,32 @@ export class SQLiteStore {
     return rows.map(this.parseDecision);
   }
 
-  updateDecisionStatus(id: number, status: Decision["status"]): void {
-    this.db.prepare(
+  /**
+   * Flip a decision's lifecycle status (active → superseded / reverted).
+   *
+   * P0 #5 — by default a 0-row UPDATE (the id doesn't exist) throws, so the
+   * op=supersede / op=revert handlers can't report a fake success for a missing
+   * id. The `requireExists: false` escape hatch exists for exactly one caller:
+   * addDecision's INTERNAL supersede of `supersedes_id`, where superseding a
+   * non-existent id is explicitly legitimate and must still commit the new
+   * decision (contract pinned by atomic_decision.test.js (d)).
+   */
+  updateDecisionStatus(
+    id: number,
+    status: Decision["status"],
+    opts: { requireExists?: boolean } = {}
+  ): void {
+    const requireExists = opts.requireExists ?? true;
+    const info = this.db.prepare(
       `UPDATE decisions SET status = ?, updated_at = ? WHERE id = ?`
     ).run(status, now(), id);
+    if (requireExists && info.changes < 1) {
+      throw new AmplifierMutationError({
+        operation: "updateDecisionStatus",
+        table: "decisions",
+        id,
+      });
+    }
   }
 
   /**
@@ -897,17 +1043,39 @@ export class SQLiteStore {
       values.push(JSON.stringify(patch.related_decision_ids ?? {}));
     }
 
+    // No changed fields is a legitimate no-op — return the existing row rather
+    // than running an UPDATE. This must stay an allowed path (see P0 #5 guard
+    // test): only a mutation that DOES change fields gets rowcount-verified.
     if (sets.length === 0) return existing;
 
     sets.push("updated_at = ?");
     values.push(now());
     values.push(id);
 
-    this.db
+    const info = this.db
       .prepare(`UPDATE decisions SET ${sets.join(", ")} WHERE id = ?`)
       .run(...values);
 
-    return this.getDecisionById(id) ?? null;
+    // P0 #5 — the existence check above already returned null for a missing id,
+    // so reaching here with 0 changes (or a read-back that vanishes) means the
+    // row disappeared mid-update. Surface it instead of returning a stale/blank
+    // value the handler would stringify as success.
+    const persisted = info.changes >= 1 ? this.getDecisionById(id) : undefined;
+    if (!persisted) {
+      logWriteError({
+        table: "decisions",
+        project: existing.project,
+        title: existing.title,
+        lastInsertRowid: id,
+        reason: "updateDecision UPDATE changed 0 rows or read-back found no row",
+      });
+      throw new AmplifierMutationError({
+        operation: "updateDecision",
+        table: "decisions",
+        id,
+      });
+    }
+    return persisted;
   }
 
   /**
@@ -935,13 +1103,32 @@ export class SQLiteStore {
     }
     relations[relation] = list;
 
-    this.db
+    const info = this.db
       .prepare(
         `UPDATE decisions SET relations = ?, updated_at = ? WHERE id = ?`
       )
       .run(JSON.stringify(relations), now(), fromId);
 
-    return this.getDecisionById(fromId) ?? null;
+    // P0 #5 — getDecisionById(fromId) above guaranteed the row existed, so a
+    // 0-row UPDATE or a vanished read-back means the row disappeared mid-link.
+    // Surface it rather than returning null the handler reads as "not found".
+    const persisted =
+      info.changes >= 1 ? this.getDecisionById(fromId) : undefined;
+    if (!persisted) {
+      logWriteError({
+        table: "decisions",
+        project: existing.project,
+        title: existing.title,
+        lastInsertRowid: fromId,
+        reason: "linkDecisions UPDATE changed 0 rows or read-back found no row",
+      });
+      throw new AmplifierMutationError({
+        operation: "linkDecisions",
+        table: "decisions",
+        id: fromId,
+      });
+    }
+    return persisted;
   }
 
   private getDecisionById(id: number): Decision | undefined {
@@ -1030,13 +1217,32 @@ export class SQLiteStore {
     const nextConfidence =
       nextStatus === "confirmed" ? 1.0 : nextStatus === "evidence" ? 0.7 : 0.5;
 
-    this.db.prepare(
+    const info = this.db.prepare(
       `UPDATE lessons
        SET evidence_links = ?, verification_status = ?, confidence = ?, updated_at = ?
        WHERE id = ?`
     ).run(JSON.stringify(links), nextStatus, nextConfidence, now(), id);
 
-    return this.getLessonById(id) ?? null;
+    // P0 #5 — the existence check (row !== undefined) above guaranteed the row
+    // existed, so a 0-row UPDATE or vanished read-back means the row went away
+    // mid-verify. Surface it rather than returning null the handler reads as
+    // "lesson not found" (which would be a misleading error) or a stale row.
+    const persisted = info.changes >= 1 ? this.getLessonById(id) : undefined;
+    if (!persisted) {
+      logWriteError({
+        table: "lessons",
+        project: row.project,
+        title: row.title,
+        lastInsertRowid: id,
+        reason: "verifyLesson UPDATE changed 0 rows or read-back found no row",
+      });
+      throw new AmplifierMutationError({
+        operation: "verifyLesson",
+        table: "lessons",
+        id,
+      });
+    }
+    return persisted;
   }
 
   /**
@@ -1045,14 +1251,35 @@ export class SQLiteStore {
    * is later proven false.
    */
   demoteLesson(id: number): Lesson | null {
-    const row = this.db.prepare(`SELECT id FROM lessons WHERE id = ?`).get(id) as { id: number } | undefined;
+    const row = this.db
+      .prepare(`SELECT id, project, title FROM lessons WHERE id = ?`)
+      .get(id) as { id: number; project: string; title: string } | undefined;
     if (!row) return null;
-    this.db.prepare(
+    const info = this.db.prepare(
       `UPDATE lessons
        SET evidence_links = '[]', verification_status = 'claim', confidence = 0.5, updated_at = ?
        WHERE id = ?`
     ).run(now(), id);
-    return this.getLessonById(id) ?? null;
+
+    // P0 #5 — existence confirmed above, so a 0-row UPDATE or vanished read-back
+    // means the row disappeared mid-demote. Surface it rather than returning
+    // null (read as "not found") or a stale row.
+    const persisted = info.changes >= 1 ? this.getLessonById(id) : undefined;
+    if (!persisted) {
+      logWriteError({
+        table: "lessons",
+        project: row.project,
+        title: row.title,
+        lastInsertRowid: id,
+        reason: "demoteLesson UPDATE changed 0 rows or read-back found no row",
+      });
+      throw new AmplifierMutationError({
+        operation: "demoteLesson",
+        table: "lessons",
+        id,
+      });
+    }
+    return persisted;
   }
 
   /**
@@ -1175,6 +1402,81 @@ export class SQLiteStore {
       `SELECT * FROM lessons WHERE project = ?`
     ).all(project) as LessonRow[];
     return rows.map(this.parseLesson);
+  }
+
+  /**
+   * v1.5.2 — projected cross-project signals from PROMOTED pattern_keys, for
+   * the Pattern Oracle's preflight scan.
+   *
+   * For each row in `pattern_promotions`, gathers the supporting lessons that
+   * live in projects OTHER than `askingProject` and folds them into a single
+   * `PromotedPatternSignal`. Lessons from the asking project itself are excluded
+   * so the local candidate-lesson path remains the dominant source for local
+   * memory (no double-counting, and local always wins). Promotions whose
+   * supporting lessons all live in the asking project (no remaining
+   * cross-project support) are dropped.
+   *
+   * Crucially, ONLY promoted keys are considered — an un-promoted recurring
+   * lesson never leaks across projects this way.
+   */
+  getPromotedPatternSignals(askingProject: string): PromotedPatternSignal[] {
+    const promotions = this.db.prepare(
+      `SELECT pattern_key FROM pattern_promotions`
+    ).all() as Array<{ pattern_key: string }>;
+
+    const signals: PromotedPatternSignal[] = [];
+    for (const { pattern_key } of promotions) {
+      const rows = this.db.prepare(
+        `SELECT * FROM lessons WHERE pattern_key = ? AND project != ?`
+      ).all(pattern_key, askingProject) as LessonRow[];
+      if (rows.length === 0) continue;
+
+      const lessons = rows.map(this.parseLesson);
+      const projects = new Set<string>();
+      let total_frequency = 0;
+      let confirmed_count = 0;
+      let best_status: "claim" | "evidence" | "confirmed" = "claim";
+      let best_confidence = 0;
+      let last_seen = "";
+      let title = "";
+      let topFreq = -1;
+      const textParts: string[] = [];
+
+      for (const l of lessons) {
+        projects.add(l.project);
+        const freq = l.frequency ?? 1;
+        total_frequency += freq;
+        const status = l.verification_status ?? "confirmed";
+        if (status === "confirmed") confirmed_count++;
+        if (statusRank(status) > statusRank(best_status)) {
+          best_status = status;
+          best_confidence = l.confidence ?? 1.0;
+        } else if (statusRank(status) === statusRank(best_status)) {
+          best_confidence = Math.max(best_confidence, l.confidence ?? 1.0);
+        }
+        if (l.updated_at > last_seen) last_seen = l.updated_at;
+        if (freq > topFreq) {
+          topFreq = freq;
+          title = l.title;
+        }
+        textParts.push(
+          [l.title, l.description, l.trigger ?? "", l.prevention ?? "", (l.tags ?? []).join(" "), l.pattern_key ?? ""].join(" ")
+        );
+      }
+
+      signals.push({
+        pattern_key,
+        title,
+        total_frequency,
+        confirmed_count,
+        source_count: projects.size,
+        best_status,
+        best_confidence,
+        last_seen,
+        text: textParts.join(" "),
+      });
+    }
+    return signals;
   }
 
   // -------------------------------------------------------------------------

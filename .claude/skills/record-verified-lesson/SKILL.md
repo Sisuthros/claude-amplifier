@@ -70,7 +70,7 @@ amplify_record_claim({
 amplify_verify_claim({
   "id": 42,
   "evidence_type": "external_doc",
-  "evidence": "configuration-reference.md §strict-mode: unknown keys are a hard error."
+  "evidence_link": "configuration-reference.md §strict-mode: unknown keys are a hard error."
 })
 // → status: evidence (0.7).
 ```
@@ -81,7 +81,7 @@ amplify_verify_claim({
 amplify_verify_claim({
   "id": 42,
   "evidence_type": "test_run",
-  "evidence": "npm test -- config.test: 'rejects unknown key' PASS"
+  "evidence_link": "npm test -- config.test: 'rejects unknown key' PASS"
 })
 // → status: confirmed (1.0). Now full-weight in the Oracle.
 ```

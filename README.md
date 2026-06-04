@@ -34,13 +34,13 @@ Claude Amplifier **v1.5.0** fixes this *structurally too*. Every `addLesson` and
 
 Both bugs share a shape: **Claude lies confidently about its own state.** Verification-gated memory (v1.4.0) catches it on the *content* side. Write-verification + stale-memory detection (v1.5.0) catches it on the *storage* side. Pattern Oracle (v1.4.0) keeps using the now-trustworthy memory to warn before the next mistake.
 
-Claude Amplifier (v1.5.0) treats every lesson as living at one of three statuses:
+Claude Amplifier (v1.5.1) treats every lesson as living at one of three statuses:
 
 ```
 claim (0.5 confidence)   →   evidence (0.7)   →   confirmed (1.0)
 ```
 
-A guess starts as a `claim` and weighs **5× less** than a `confirmed` lesson when the Pattern Oracle scores risk. To promote, you attach evidence: `build_passed`, `test_passed`, `user_confirmation`, `production_metric`, `external_doc`, `independent_observation`. Two distinct evidence types auto-promote a claim to `confirmed`. Without evidence, the guess stays a guess — and stays quiet.
+A guess starts as a `claim` and weighs **5× less** than a `confirmed` lesson when the Pattern Oracle scores risk. To promote, you attach evidence: `git_commit`, `test_run`, `user_confirmation`, `external_doc`, `manual_review`. Two distinct evidence types auto-promote a claim to `confirmed`. Without evidence, the guess stays a guess — and stays quiet.
 
 The Pattern Oracle runs *before* each task, scans your stored lessons + active decisions, and surfaces the top matches with their risk score and verification status. You see the receipts; Claude sees the receipts; nothing gets treated as gospel just because it got written down once.
 
@@ -113,7 +113,17 @@ Claude Amplifier doesn't fix Claude. It gives Claude a **place to remember** so 
 
 Thirteen MCP tools, five SQLite tables, zero cloud — your memory stays on your disk.
 
-### New in v1.5.0 — Trust Rebuild
+### New in v1.5.1 — Hardening & discoverability
+
+A reliability pass with **no tool signature changes** — every public API is identical to v1.5.0, and v1.5.0 databases load unmodified. The point of this release is to make the storage layer harder to break under real concurrent use, and to make the package findable from the official MCP registry.
+
+- **Concurrency hardening.** The SQLite connection now opens with a `busy_timeout` of 5s, so two writers (Claude Desktop + Claude Code, or a SessionEnd hook firing mid-session) retry instead of failing with `SQLITE_BUSY`. WAL mode is unchanged.
+- **UTF-8-aware token budgeting.** `context_load`'s token estimate now counts UTF-8 *bytes* / 4 instead of `string.length` / 4, so Finnish ä/ö, emoji, and CJK no longer get under-counted into a budget overfill.
+- **`safeRowid()` guard** — a BigInt `lastInsertRowid` above 2^53 now throws rather than silently truncating to a wrong-but-plausible id. A wrong id that looks right is exactly the failure class this tool exists to prevent.
+- **Type safety + SQL-injection audit.** All 23 `as any` casts on SQLite rows were replaced with precise row interfaces, and every dynamic SQL site was reviewed (all parameterized or hardcoded-literal). Still exactly two runtime dependencies: `@modelcontextprotocol/sdk` + `better-sqlite3`.
+- **`mcpName`** (`io.github.sisuthros/claude-amplifier`) so the package can be published to the official MCP registry that downstream directories sync from.
+
+### Previously: v1.5.0 — Trust Rebuild
 
 ```
    ┌─────────────────────────────────────────────────────────┐
@@ -164,9 +174,9 @@ Plus a quiet bug fix that matters for Finnish, Swedish, and other languages: `\b
    │  When Claude records a lesson it just inferred          │
    │  > amplify_record_claim({ ... })          status: claim │
    │                                                         │
-   │  Later, after the build passes:                         │
+   │  Later, after the tests pass:                           │
    │  > amplify_verify_claim({ id: 17,                       │
-   │      evidence_type: "build_passed", ... })              │
+   │      evidence_type: "test_run", ... })                  │
    │                                              → evidence │
    │  Then you confirm:                                      │
    │  > amplify_verify_claim({ id: 17,                       │
@@ -551,16 +561,15 @@ amplify_record_claim({
 // First evidence — promotes claim → evidence (confidence 0.7)
 amplify_verify_claim({
   id: 17,
-  evidence_type: "build_passed",
+  evidence_type: "test_run",
   evidence_link: "https://github.com/.../actions/runs/12345",
-  notes: "CI green after re-adding the header",
 })
 
 // User confirmation — promotes evidence → confirmed (confidence 1.0)
 amplify_verify_claim({
   id: 17,
   evidence_type: "user_confirmation",
-  notes: "User confirmed: 'yes that was it'",
+  evidence_link: "User confirmed: 'yes that was it'",
 })
 ```
 
@@ -570,7 +579,7 @@ amplify_verify_claim({
 - `claim + 2 distinct evidence types` → `confirmed` (confidence 1.0)
 - Explicit `promote_to` overrides the auto-rule
 
-Evidence types: `build_passed` | `test_passed` | `user_confirmation` | `independent_observation` | `external_doc` | `production_metric`.
+Evidence types: `git_commit` | `test_run` | `user_confirmation` | `external_doc` | `manual_review`.
 
 ### `amplify_promote_pattern` — graduate a recurring lesson to global (v1.4.0)
 
@@ -578,13 +587,10 @@ When the same `pattern_key` has produced `confirmed` lessons in ≥2 projects, i
 - The `pattern_key` exists in ≥2 distinct projects
 - At least one confirmed lesson with that key
 
+The tool takes only the `pattern_key` — the title, description, and example are derived from the confirmed lessons already carrying that key, so there's nothing else to pass:
+
 ```js
-amplify_promote_pattern({
-  pattern_key: "avoid-ambiguous-provider-prefix",
-  title: "Avoid model names containing another provider's prefix",
-  description: "Some agent runtimes parse the model string by substring to infer the provider. A name like 'vendor-a/vendor-b/model-x' may route as vendor-b at runtime but authenticate as vendor-a at startup, returning 'Invalid API Key' on every heartbeat.",
-  example: "Use 'vendor-a/model-x' (single, unambiguous prefix) instead.",
-})
+amplify_promote_pattern({ pattern_key: "avoid-ambiguous-provider-prefix" })
 ```
 
 Refuses promotion when the threshold isn't met — pattern_keys with only one project of evidence are *not* generalizable yet.
@@ -749,7 +755,7 @@ git clone https://github.com/Sisuthros/claude-amplifier
 cd claude-amplifier
 npm install
 npm run build
-npm test            # 45 tests, all should pass
+npm test            # 162 tests, all should pass
 node dist/index.js help
 ```
 

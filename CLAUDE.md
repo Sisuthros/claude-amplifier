@@ -109,7 +109,7 @@ user confirmed, an external doc backed it up — promote it:
 ```js
 amplify_verify_claim({
   id: 17,
-  evidence_type: "test_passed",
+  evidence_type: "test_run",
   evidence_link: "https://github.com/.../runs/123"
 })
 ```

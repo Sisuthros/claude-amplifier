@@ -18,7 +18,7 @@
  * Threshold values are env-tunable via AMPLIFIER_ORACLE_THRESHOLD_*.
  */
 
-import type { Lesson, Decision } from "./storage.js";
+import type { Lesson, Decision, PromotedPatternSignal } from "./storage.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +32,15 @@ export interface PreflightInput {
   candidateLessons: Lesson[];
   /** Active decisions for the project; oracle weighs them in. */
   candidateDecisions: Decision[];
+  /**
+   * v1.5.2 — cross-project PROMOTED pattern signals (from
+   * SQLiteStore.getPromotedPatternSignals). These let a globally-promoted,
+   * confirmed pattern raise risk for a matching task in a *different* project,
+   * but are deliberately downweighted (see CROSS_PROJECT_FACTOR) so they never
+   * drown out local lessons. Optional for backwards compatibility — callers
+   * that don't pass it get the pre-1.5.2 behavior.
+   */
+  promotedPatterns?: PromotedPatternSignal[];
 }
 
 export interface MatchedPattern {
@@ -86,6 +95,16 @@ function thresholds() {
     high: Number(env.AMPLIFIER_ORACLE_THRESHOLD_HIGH ?? 3.0),
     critical: Number(env.AMPLIFIER_ORACLE_THRESHOLD_CRITICAL ?? 6.0),
   };
+}
+
+/**
+ * How much a cross-project PROMOTED pattern is allowed to count relative to a
+ * local lesson of the same strength. < 1 so promoted globals nudge the score
+ * but never drown out the asking project's own memory. Env-tunable.
+ */
+function crossProjectFactor(): number {
+  const v = Number(process.env.AMPLIFIER_ORACLE_CROSS_PROJECT_FACTOR ?? 0.4);
+  return Number.isFinite(v) && v >= 0 ? v : 0.4;
 }
 
 function statusWeight(status: "claim" | "evidence" | "confirmed" | undefined): number {
@@ -194,6 +213,7 @@ export function preflight(input: PreflightInput): PreflightResult {
 
   // Match lessons. We need a minimum overlap to avoid noise.
   const OVERLAP_THRESHOLD = 0.15;
+  const CROSS_PROJECT_FACTOR = crossProjectFactor();
 
   const matchedLessonObjs: Array<{ lesson: Lesson; overlap: number }> = [];
   for (const lesson of input.candidateLessons) {
@@ -290,6 +310,62 @@ export function preflight(input: PreflightInput): PreflightResult {
       // to dominate but they should still nudge the score up.
       totalScore += 0.5 * statusWeight(decision.verification_status);
     }
+  }
+
+  // ── Cross-project promoted patterns ─────────────────────────────────
+  // A globally-promoted pattern can raise risk for a task in a DIFFERENT
+  // project. It is downweighted by CROSS_PROJECT_FACTOR so it never drowns
+  // out local lessons, and further weighted by the strength of its
+  // confirmation (status weight × confirmation ratio) so a weak/unconfirmed
+  // promoted signal contributes much less than a confirmed one.
+  for (const sig of input.promotedPatterns ?? []) {
+    // If the local matched lessons already carry this pattern_key, the local
+    // path owns it — don't double-count or let the cross-project signal pile on.
+    if (patternMap.has(sig.pattern_key)) continue;
+
+    const sigTokens = tokenize(sig.text);
+    if (sigTokens.size === 0) continue;
+    let hits = 0;
+    for (const tk of promptTokens) {
+      if (sigTokens.has(tk)) hits++;
+    }
+    const overlap =
+      promptTokens.size === 0 ? 0 : hits / Math.min(promptTokens.size, sigTokens.size);
+    if (overlap < OVERLAP_THRESHOLD) continue;
+
+    const freq = sig.total_frequency > 0 ? sig.total_frequency : 1;
+    const conf = sig.best_confidence > 0 ? sig.best_confidence : 1.0;
+    const weight = statusWeight(sig.best_status);
+    // Confirmation ratio: fraction of supporting lessons that are confirmed,
+    // floored so a promoted-but-unconfirmed signal still registers faintly.
+    const confirmRatio =
+      sig.total_frequency > 0
+        ? Math.max(0.25, sig.confirmed_count / Math.max(1, sig.source_count))
+        : 0.25;
+    const contribution =
+      freq * conf * weight * overlap * confirmRatio * CROSS_PROJECT_FACTOR;
+    if (contribution <= 0) continue;
+    totalScore += contribution;
+
+    patternMap.set(sig.pattern_key, {
+      title: sig.title,
+      frequency: freq,
+      last_seen: sig.last_seen,
+      verification_status: sig.best_status,
+      confidence: conf,
+      weight_contribution: contribution,
+    });
+    // Surface as a matched pattern too (re-derive the list below).
+    matched_patterns.push({
+      pattern_key: sig.pattern_key,
+      title: sig.title,
+      frequency: freq,
+      last_seen: sig.last_seen,
+      verification_status: sig.best_status,
+      confidence: conf,
+      weight_contribution: round2(contribution),
+    });
+    matched_patterns.sort((a, b) => b.weight_contribution - a.weight_contribution);
   }
 
   const t = thresholds();

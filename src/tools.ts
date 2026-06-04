@@ -4,6 +4,7 @@ import {
   Decision,
   Pattern,
   AmplifierWriteError,
+  AmplifierMutationError,
 } from "./storage.js";
 import {
   freshnessReport,
@@ -15,6 +16,32 @@ import {
   analyzeMemoryFile,
   formatPromotionReport,
 } from "./promote_memory.js";
+import {
+  ValidationError,
+  validateId,
+  validateOptionalId,
+  validateEnum,
+  validateRequiredString,
+  validateStringArray,
+  validateRelations,
+} from "./validation.js";
+
+/**
+ * P1 #7 — run a validation block and convert a thrown {@link ValidationError}
+ * into the legacy `"Error: …"` string the handlers have always returned for
+ * bad input. The handlers' public contract is "return an Error string, never
+ * throw, for caller mistakes"; the validation helpers throw, so this adapter
+ * preserves that contract without changing the accepted input shape. Any
+ * non-ValidationError (a real bug) is re-thrown so it isn't swallowed.
+ */
+function withValidation<T>(fn: () => T): T | string {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof ValidationError) return `Error: ${err.message}`;
+    throw err;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -215,32 +242,31 @@ export async function handleLearn(
   args: Record<string, unknown>
 ): Promise<string> {
   const {
-    project,
-    type = "insight",
-    title,
-    description,
     context,
     resolution,
     prevention,
-    severity = "medium",
     tags,
     trigger,
     pattern_key,
   } = args as Record<string, string>;
 
-  if (!project) return "Error: 'project' is required.";
-  if (!title) return "Error: 'title' is required.";
-  if (!description) return "Error: 'description' is required.";
+  // P1 #7 — validate + normalize required/enum fields up front. Returns the
+  // legacy "Error: …" string (not a throw) for any caller mistake, preserving
+  // back-compat. The accepted input shape is unchanged: project/title/
+  // description stay required non-empty strings, type/severity stay the same
+  // enums with the same defaults.
+  const validTypes = ["mistake", "success", "insight", "warning"] as const;
+  const validSeverities = ["low", "medium", "high", "critical"] as const;
 
-  const validTypes = ["mistake", "success", "insight", "warning"];
-  const validSeverities = ["low", "medium", "high", "critical"];
-
-  if (!validTypes.includes(type as string)) {
-    return `Error: 'type' must be one of: ${validTypes.join(", ")}`;
-  }
-  if (!validSeverities.includes(severity as string)) {
-    return `Error: 'severity' must be one of: ${validSeverities.join(", ")}`;
-  }
+  const validated = withValidation(() => ({
+    project: validateRequiredString(args.project, "project"),
+    title: validateRequiredString(args.title, "title"),
+    description: validateRequiredString(args.description, "description"),
+    type: validateEnum(args.type, validTypes, "type", "insight"),
+    severity: validateEnum(args.severity, validSeverities, "severity", "medium"),
+  }));
+  if (typeof validated === "string") return validated;
+  const { project, title, description, type, severity } = validated;
 
   let lesson: Lesson;
   try {
@@ -317,17 +343,35 @@ export async function handleDecisions(
 
   switch (op) {
     case "track": {
-      if (!project) return "Error: 'project' is required for op=track.";
-      if (!title) return "Error: 'title' is required for op=track.";
-      if (!description) return "Error: 'description' is required for op=track.";
+      // P1 #7 — validate required strings, the optional supersedes id, and the
+      // relations payload up front. Same accepted shape (supersedes still
+      // string-or-number; relations still the 3-bucket object) but a bad id /
+      // unknown relation key / non-array bucket now yields a clear Error string
+      // instead of being silently passed through to storage.
+      const v = withValidation(() => ({
+        project: validateRequiredString(args.project, "project"),
+        title: validateRequiredString(args.title, "title"),
+        description: validateRequiredString(args.description, "description"),
+        supersedes_id: validateOptionalId(args.supersedes, "supersedes"),
+        related_decision_ids: validateRelations(args.relations, "relations"),
+      }));
+      if (typeof v === "string") {
+        // Preserve the historical "for op=track" suffix on the bare
+        // required-field errors so existing callers/messages stay recognizable.
+        return v
+          .replace(
+            /^Error: '(project|title|description)' is required[^\n]*$/,
+            (_m, f) => `Error: '${f}' is required for op=track.`,
+          );
+      }
 
       let decision: Decision;
       try {
         decision = store.addDecision({
-          project,
+          project: v.project,
           category,
-          title,
-          description,
+          title: v.title,
+          description: v.description,
           rationale: rationale || undefined,
           tags: parseTags(tags),
           status: "active",
@@ -339,11 +383,8 @@ export async function handleDecisions(
           alternatives_considered: Array.isArray(alternatives_considered)
             ? (alternatives_considered as string[])
             : undefined,
-          supersedes_id: supersedes ? Number(supersedes) : undefined,
-          related_decision_ids:
-            relations && typeof relations === "object"
-              ? (relations as Decision["related_decision_ids"])
-              : undefined,
+          supersedes_id: v.supersedes_id,
+          related_decision_ids: v.related_decision_ids,
         });
       } catch (err) {
         if (err instanceof AmplifierWriteError) {
@@ -377,7 +418,16 @@ export async function handleDecisions(
       if (!["pending", "validated", "failed"].includes(newStatus)) {
         return "Error: 'outcome_status' must be one of: pending, validated, failed.";
       }
-      store.updateOutcomeStatus(Number(id), newStatus);
+      // P0 #5 — a missing id makes updateOutcomeStatus throw rather than
+      // silently no-op, so we never report a fake "outcome marked as …".
+      try {
+        store.updateOutcomeStatus(Number(id), newStatus);
+      } catch (err) {
+        if (err instanceof AmplifierMutationError) {
+          return `ERROR: decision ${id} not found — outcome NOT updated. ${err.message}`;
+        }
+        throw err;
+      }
       return `Decision ${id} outcome marked as ${newStatus}.`;
     }
 
@@ -465,7 +515,17 @@ export async function handleDecisions(
     case "revert": {
       if (!id) return `Error: 'id' is required for op=${op}.`;
       const newStatus = op === "supersede" ? "superseded" : "reverted";
-      store.updateDecisionStatus(Number(id), newStatus);
+      // P0 #5 — a missing id makes updateDecisionStatus throw (default
+      // requireExists:true) rather than silently no-op, so we never report a
+      // fake "Decision N marked as …" for a decision that doesn't exist.
+      try {
+        store.updateDecisionStatus(Number(id), newStatus);
+      } catch (err) {
+        if (err instanceof AmplifierMutationError) {
+          return `ERROR: decision ${id} not found — NOT marked as ${newStatus}. ${err.message}`;
+        }
+        throw err;
+      }
       return `Decision ${id} marked as ${newStatus}.`;
     }
 
@@ -482,24 +542,22 @@ export async function handleLinkDecisions(
   store: SQLiteStore,
   args: Record<string, unknown>
 ): Promise<string> {
-  const { from, to, relation } = args as Record<string, string>;
-
-  if (!from) return "Error: 'from' decision id is required.";
-  if (!to) return "Error: 'to' decision id is required.";
-
-  const validRelations = ["triggered_by", "caused", "relates_to"];
-  if (!validRelations.includes(relation as string)) {
-    return `Error: 'relation' must be one of: ${validRelations.join(", ")}`;
-  }
+  // P1 #7 — validate the two ids (positive integers, string-or-number) and the
+  // relation enum up front. Same accepted shape; a missing/zero/non-numeric id
+  // or bad relation now produces a clear Error string. A valid-but-nonexistent
+  // id still falls through to store.linkDecisions → "not found" (unchanged).
+  const validRelations = ["triggered_by", "caused", "relates_to"] as const;
+  const v = withValidation(() => ({
+    from: validateId(args.from, "from"),
+    to: validateId(args.to, "to"),
+    relation: validateEnum(args.relation, validRelations, "relation"),
+  }));
+  if (typeof v === "string") return v;
 
   try {
-    const updated = store.linkDecisions(
-      Number(from),
-      Number(to),
-      relation as "triggered_by" | "caused" | "relates_to"
-    );
-    if (!updated) return `Error: decision ${from} not found.`;
-    return `Linked: decision #${from} --${relation}--> decision #${to}.`;
+    const updated = store.linkDecisions(v.from, v.to, v.relation);
+    if (!updated) return `Error: decision ${v.from} not found.`;
+    return `Linked: decision #${v.from} --${v.relation}--> decision #${v.to}.`;
   } catch (err) {
     return `Error: ${(err as Error).message}`;
   }
@@ -896,6 +954,7 @@ export async function handlePreflight(
 
   const candidateLessons = store.getAllLessonsForProject(project);
   const candidateDecisions = store.getDecisions(project, "active");
+  const promotedPatterns = store.getPromotedPatternSignals(project);
 
   const result: PreflightResult = preflight({
     project,
@@ -903,6 +962,7 @@ export async function handlePreflight(
     context,
     candidateLessons,
     candidateDecisions,
+    promotedPatterns,
   });
 
   const riskBadge =
@@ -966,10 +1026,18 @@ export async function handleRecordClaim(
   store: SQLiteStore,
   args: Record<string, unknown>
 ): Promise<string> {
-  const project = String(args.project ?? "");
+  // P1 #7 — validate the required strings up front (replacing the
+  // `String(args.x ?? "")` + `if (!x)` pattern). type/severity keep their
+  // historical lenient coercion here so the accepted input shape is unchanged.
+  const validated = withValidation(() => ({
+    project: validateRequiredString(args.project, "project"),
+    title: validateRequiredString(args.title, "title"),
+    description: validateRequiredString(args.description, "description"),
+  }));
+  if (typeof validated === "string") return validated;
+  const { project, title, description } = validated;
+
   const type = (args.type ? String(args.type) : "insight") as Lesson["type"];
-  const title = String(args.title ?? "");
-  const description = String(args.description ?? "");
   const context = args.context ? String(args.context) : undefined;
   const resolution = args.resolution ? String(args.resolution) : undefined;
   const prevention = args.prevention ? String(args.prevention) : undefined;
@@ -980,10 +1048,6 @@ export async function handleRecordClaim(
     typeof args.initial_confidence === "number"
       ? Math.max(0, Math.min(1, args.initial_confidence))
       : 0.5;
-
-  if (!project) return "Error: 'project' is required.";
-  if (!title) return "Error: 'title' is required.";
-  if (!description) return "Error: 'description' is required.";
 
   const { created, lesson } = store.recordLesson({
     project,
@@ -1018,30 +1082,28 @@ export async function handleVerifyClaim(
   store: SQLiteStore,
   args: Record<string, unknown>
 ): Promise<string> {
-  const id = Number(args.id);
-  const evidence_type = String(args.evidence_type ?? "") as
-    | "git_commit"
-    | "test_run"
-    | "user_confirmation"
-    | "external_doc"
-    | "manual_review";
-  const evidence_link = String(args.evidence_link ?? "");
-  const promote_to = args.promote_to ? String(args.promote_to) : undefined;
-
-  if (!id || isNaN(id)) return "Error: 'id' is required and must be a number.";
-  if (!evidence_type) return "Error: 'evidence_type' is required.";
-  if (!evidence_link) return "Error: 'evidence_link' is required.";
-
+  // P1 #7 — validate the id (positive integer), the evidence_type against the
+  // CANONICAL enum, and the required evidence_link up front. Same accepted
+  // shape (id still string-or-number; same enum members + field name). A valid
+  // id for a missing lesson still falls through to store.verifyLesson →
+  // "not found" (unchanged). promote_to keeps its own optional check below.
   const valid_types = [
     "git_commit",
     "test_run",
     "user_confirmation",
     "external_doc",
     "manual_review",
-  ];
-  if (!valid_types.includes(evidence_type)) {
-    return `Error: evidence_type must be one of ${valid_types.join(", ")}.`;
-  }
+  ] as const;
+
+  const v = withValidation(() => ({
+    id: validateId(args.id, "id"),
+    evidence_type: validateEnum(args.evidence_type, valid_types, "evidence_type"),
+    evidence_link: validateRequiredString(args.evidence_link, "evidence_link"),
+  }));
+  if (typeof v === "string") return v;
+  const { id, evidence_type, evidence_link } = v;
+
+  const promote_to = args.promote_to ? String(args.promote_to) : undefined;
   if (promote_to && promote_to !== "evidence" && promote_to !== "confirmed") {
     return "Error: promote_to must be 'evidence' or 'confirmed'.";
   }

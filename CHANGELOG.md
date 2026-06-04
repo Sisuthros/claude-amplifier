@@ -2,6 +2,63 @@
 
 All notable changes to Claude Amplifier are documented here.
 
+## [1.5.2] — 2026-06-05 — Trust everywhere
+
+Extends the write-verification guarantee from inserts to **every** mutation,
+ships the operating cards to npm users, and makes promoted patterns actually
+influence risk scoring. No tool signatures changed; every public API is
+identical to 1.5.1.
+
+### Added
+
+- **`.claude/skills/` ships with the package.** The six operating cards
+  (triage-stale-memory, record-verified-lesson, investigate-write-failure,
+  add-mcp-tool, release-npm-version, design-memory-eval) are now in the npm
+  tarball, with a pack smoke test asserting all six are included.
+- **`mcpName`** (`io.github.sisuthros/claude-amplifier`) for the official MCP
+  registry.
+- **Lightweight validation helpers** (`src/validation.ts`) wired into the write
+  handlers — ids, enums, required strings, arrays, relation payloads — with no
+  new dependency.
+
+### Changed
+
+- **Write-verification now covers all mutation paths**, not just inserts. The
+  frequency-bump, `updateOutcomeStatus`, `updateDecisionStatus`,
+  `updateDecision`, `linkDecisions`, `verifyLesson`, and `demoteLesson` paths
+  now verify rowcount / read-back. A mutation targeting a non-existent id can no
+  longer report a fake success.
+- **`addDecision` is atomic.** Insert + read-back + supersede-old run in a
+  single transaction: a failed read-back leaves the old decision active, no
+  partial supersede.
+- **Promoted patterns now affect `amplify_preflight`.** A promoted, confirmed
+  cross-project pattern can influence risk scoring in another project,
+  down-weighted so it never drowns out local lessons.
+- **Evidence schema canonicalized** across README, CLAUDE.md, and all skills to
+  match the code exactly (`git_commit | test_run | user_confirmation |
+  external_doc | manual_review`, field `evidence_link`). A guard test fails if
+  docs drift back to stale terms.
+- **`src/index.ts` split** into `src/tool_schemas.ts` (the TOOLS array) and
+  `src/tool_router.ts` (dispatch); index.ts is now a thin entrypoint.
+
+### Security
+
+- SQL-injection audit (clean) re-run on the new code: the only dynamic SQL is
+  hardcoded migration literals, an `as const` column allowlist with `?`-bound
+  values, and interpolation inside a bound LIKE value — never user-controlled
+  identifiers.
+
+### Tests
+
+- 277 tests pass (was 162). New suites: pack-includes-skills, docs-evidence-
+  schema, promote-preflight, atomic-decision, mutation-readback, tool-split,
+  validation.
+
+### Backwards compatibility
+
+- Fully compatible with 1.5.x databases and config. Type/reliability changes
+  only; no schema migration, no tool signature changes.
+
 ## [1.5.1] — 2026-06-04 — Hardening & discoverability
 
 A type-safety, concurrency, and discoverability pass. No behavior changes to
