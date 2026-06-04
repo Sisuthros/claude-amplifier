@@ -77,6 +77,22 @@ export function logWriteError(entry: {
   }
 }
 
+/**
+ * Convert a SQLite rowid (BigInt from better-sqlite3, or a plain number) to a
+ * safe JS number. Throws rather than silently truncating above 2^53 — a wrong
+ * id that looks right is exactly the failure class this tool exists to prevent.
+ */
+export function safeRowid(rowid: bigint | number): number {
+  if (typeof rowid === "number") return rowid;
+  if (rowid > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `rowid ${rowid} exceeds JavaScript's safe integer range (2^53). ` +
+        `Refusing to truncate — this would corrupt the returned id.`,
+    );
+  }
+  return Number(rowid);
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -193,6 +209,91 @@ export interface Preference {
 }
 
 // ---------------------------------------------------------------------------
+// Raw SQLite row types
+//
+// These mirror the on-disk column shapes (see migrate()): TEXT → string,
+// INTEGER/REAL → number, booleans stored as 0/1. JSON-encoded columns (tags,
+// evidence_links, trade_offs, relations, …) arrive as raw strings and are
+// parsed by the parse* mappers into their domain shapes. Nullable columns are
+// typed `T | null` to match what better-sqlite3 returns. These types exist so
+// `.get(...)`/`.all(...)` results carry a precise shape instead of `any`.
+// ---------------------------------------------------------------------------
+
+/** Raw `lessons` table row, as returned by `SELECT * FROM lessons`. */
+interface LessonRow {
+  id: number;
+  project: string;
+  type: string;
+  title: string;
+  description: string;
+  context: string | null;
+  resolution: string | null;
+  prevention: string | null;
+  severity: string;
+  tags: string;
+  created_at: string;
+  updated_at: string;
+  trigger: string | null;
+  frequency: number | null;
+  pattern_key: string | null;
+  verification_status: string | null;
+  evidence_links: string | null;
+  confidence: number | null;
+}
+
+/** Raw `decisions` table row, as returned by `SELECT * FROM decisions`. */
+interface DecisionRow {
+  id: number;
+  project: string;
+  category: string;
+  title: string;
+  description: string;
+  rationale: string | null;
+  tags: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  outcome_check_in: string | null;
+  outcome_status: string | null;
+  restore_step: string | null;
+  next_step: string | null;
+  blocked_on: string | null;
+  trade_offs: string;
+  alternatives_considered: string;
+  supersedes_id: number | null;
+  relations: string;
+  verification_status: string | null;
+  evidence_links: string | null;
+  confidence: number | null;
+}
+
+/** Raw `patterns` table row, as returned by `SELECT * FROM patterns`. */
+interface PatternRow {
+  id: number;
+  title: string;
+  description: string;
+  example: string | null;
+  tags: string;
+  applies_to: string;
+  created_at: string;
+}
+
+/** Raw `pattern_promotions` table row. */
+interface PatternPromotionRow {
+  id: number;
+  pattern_key: string;
+  promoted_at: string;
+  promoted_from_projects: string;
+  total_frequency: number;
+}
+
+/** Slim projection used for frequency-bump existence checks. */
+interface LessonExistenceRow {
+  id: number;
+  frequency: number;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -220,10 +321,34 @@ export class SQLiteStore {
 
     const resolvedPath = dbPath ?? path.join(dir, "amplifier.db");
     this.dbPath = resolvedPath;
-    this.db = new Database(resolvedPath);
+    // better-sqlite3 is synchronous; with two writers (Claude Desktop +
+    // Claude Code, or a SessionEnd hook firing mid-session) a same-instant
+    // write can throw SQLITE_BUSY. `timeout` makes the driver retry for up to
+    // 5s before giving up. The matching busy_timeout pragma covers connections
+    // opened by the WAL checkpointer. CLAUDE.md encourages a session-start
+    // hook, so concurrent processes are the expected case, not an edge case.
+    this.db = new Database(resolvedPath, { timeout: 5000 });
+    this.db.pragma("busy_timeout = 5000");
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.migrate();
+  }
+
+  /**
+   * Connection-level PRAGMA values, for diagnostics (`doctor`) and tests.
+   * Reading these confirms the concurrency hardening is actually applied to
+   * the live connection rather than assumed.
+   */
+  pragmas(): { busy_timeout: number; journal_mode: string; foreign_keys: number } {
+    const one = (p: string): unknown => {
+      const row = this.db.pragma(p, { simple: true });
+      return row;
+    };
+    return {
+      busy_timeout: Number(one("busy_timeout")),
+      journal_mode: String(one("journal_mode")),
+      foreign_keys: Number(one("foreign_keys")),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -251,11 +376,11 @@ export class SQLiteStore {
     title: string;
     type: string;
     pattern_key?: string;
-  }): { id: number; frequency: number } | undefined {
+  }): LessonExistenceRow | undefined {
     if (data.pattern_key) {
       const byKey = this.db
         .prepare(`SELECT id, frequency FROM lessons WHERE project = ? AND pattern_key = ?`)
-        .get(data.project, data.pattern_key) as { id: number; frequency: number } | undefined;
+        .get(data.project, data.pattern_key) as LessonExistenceRow | undefined;
       if (byKey) return byKey;
     }
     return this.db
@@ -263,16 +388,14 @@ export class SQLiteStore {
         `SELECT id, frequency FROM lessons
          WHERE project = ? AND title = ? AND type = ? AND pattern_key IS NULL`
       )
-      .get(data.project, data.title, data.type) as
-      | { id: number; frequency: number }
-      | undefined;
+      .get(data.project, data.title, data.type) as LessonExistenceRow | undefined;
   }
 
   /** All lessons across every project — used by `claude-amplifier list` / `stats`. */
   getAllLessons(limit = 1000): Lesson[] {
     const rows = this.db
       .prepare(`SELECT * FROM lessons ORDER BY created_at DESC LIMIT ?`)
-      .all(limit) as any[];
+      .all(limit) as LessonRow[];
     return rows.map(this.parseLesson);
   }
 
@@ -280,7 +403,7 @@ export class SQLiteStore {
   getAllDecisions(limit = 1000): Decision[] {
     const rows = this.db
       .prepare(`SELECT * FROM decisions ORDER BY created_at DESC LIMIT ?`)
-      .all(limit) as any[];
+      .all(limit) as DecisionRow[];
     return rows.map((r) => this.parseDecision(r));
   }
 
@@ -288,7 +411,7 @@ export class SQLiteStore {
   getAllPatterns(): Pattern[] {
     const rows = this.db
       .prepare(`SELECT * FROM patterns ORDER BY created_at DESC`)
-      .all() as any[];
+      .all() as PatternRow[];
     return rows.map((r) => this.parsePattern(r));
   }
 
@@ -441,23 +564,19 @@ export class SQLiteStore {
     // time. If a pattern_key is provided and an active lesson with that key
     // exists for the project, bump its frequency. Otherwise fall back to
     // exact (project, title, type) matching for backwards compatibility.
-    let existing: { id: number; frequency: number } | undefined;
+    let existing: LessonExistenceRow | undefined;
 
     if (data.pattern_key) {
       existing = this.db.prepare(
         `SELECT id, frequency FROM lessons WHERE project = ? AND pattern_key = ?`
-      ).get(data.project, data.pattern_key) as
-        | { id: number; frequency: number }
-        | undefined;
+      ).get(data.project, data.pattern_key) as LessonExistenceRow | undefined;
     }
 
     if (!existing) {
       existing = this.db.prepare(
         `SELECT id, frequency FROM lessons
          WHERE project = ? AND title = ? AND type = ? AND pattern_key IS NULL`
-      ).get(data.project, data.title, data.type) as
-        | { id: number; frequency: number }
-        | undefined;
+      ).get(data.project, data.title, data.type) as LessonExistenceRow | undefined;
     }
 
     if (existing) {
@@ -505,7 +624,7 @@ export class SQLiteStore {
     // recorded (id: undefined)" messages that looked successful but persisted
     // nothing. Now we re-read and throw a typed error so the MCP layer can
     // surface a real failure to Claude.
-    const rowid = Number(info.lastInsertRowid);
+    const rowid = safeRowid(info.lastInsertRowid);
     const persisted = this.getLessonById(rowid);
     if (!persisted) {
       logWriteError({
@@ -528,7 +647,7 @@ export class SQLiteStore {
   getLessons(project: string, limit = 50): Lesson[] {
     const rows = this.db.prepare(
       `SELECT * FROM lessons WHERE project = ? ORDER BY created_at DESC LIMIT ?`
-    ).all(project, limit) as any[];
+    ).all(project, limit) as LessonRow[];
     return rows.map(this.parseLesson);
   }
 
@@ -539,27 +658,36 @@ export class SQLiteStore {
           `SELECT * FROM lessons WHERE project = ?
            AND (title LIKE ? OR description LIKE ? OR tags LIKE ?)
            ORDER BY created_at DESC LIMIT 30`
-        ).all(project, like, like, like) as any[]
+        ).all(project, like, like, like) as LessonRow[]
       : this.db.prepare(
           `SELECT * FROM lessons
            WHERE title LIKE ? OR description LIKE ? OR tags LIKE ?
            ORDER BY created_at DESC LIMIT 30`
-        ).all(like, like, like) as any[];
+        ).all(like, like, like) as LessonRow[];
     return rows.map(this.parseLesson);
   }
 
   private getLessonById(id: number): Lesson | undefined {
-    const row = this.db.prepare(`SELECT * FROM lessons WHERE id = ?`).get(id) as any;
+    const row = this.db.prepare(`SELECT * FROM lessons WHERE id = ?`).get(id) as
+      | LessonRow
+      | undefined;
     return row ? this.parseLesson(row) : undefined;
   }
 
-  private parseLesson(row: any): Lesson {
+  private parseLesson(row: LessonRow): Lesson {
     return {
       ...row,
+      type: row.type as Lesson["type"],
+      severity: row.severity as Lesson["severity"],
+      context: row.context ?? undefined,
+      resolution: row.resolution ?? undefined,
+      prevention: row.prevention ?? undefined,
+      trigger: row.trigger ?? undefined,
       tags: JSON.parse(row.tags || "[]"),
       frequency: row.frequency ?? 1,
       pattern_key: row.pattern_key ?? undefined,
-      verification_status: row.verification_status ?? "confirmed",
+      verification_status:
+        (row.verification_status as Lesson["verification_status"]) ?? "confirmed",
       evidence_links: row.evidence_links
         ? JSON.parse(row.evidence_links)
         : [],
@@ -615,7 +743,7 @@ export class SQLiteStore {
     }
 
     // v1.5.0 — write-verification (see addLesson for rationale).
-    const rowid = Number(info.lastInsertRowid);
+    const rowid = safeRowid(info.lastInsertRowid);
     const persisted = this.getDecisionById(rowid);
     if (!persisted) {
       logWriteError({
@@ -647,8 +775,14 @@ export class SQLiteStore {
          AND outcome_check_in IS NOT NULL AND outcome_status = 'pending'`
       : `SELECT * FROM decisions
          WHERE outcome_check_in IS NOT NULL AND outcome_status = 'pending'`;
-    const rows = (project ? this.db.prepare(sql).all(project) : this.db.prepare(sql).all()) as any[];
-    const overdue = rows.filter((r) => this.isOutcomeOverdue(r.outcome_check_in, r.created_at));
+    const rows = (project
+      ? this.db.prepare(sql).all(project)
+      : this.db.prepare(sql).all()) as DecisionRow[];
+    // The SQL guarantees outcome_check_in IS NOT NULL, so the non-null
+    // assertion below is sound for the filter's date arithmetic.
+    const overdue = rows.filter((r) =>
+      this.isOutcomeOverdue(r.outcome_check_in!, r.created_at)
+    );
     return overdue.map(this.parseDecision);
   }
 
@@ -675,7 +809,7 @@ export class SQLiteStore {
   getDecisions(project: string, status = "active"): Decision[] {
     const rows = this.db.prepare(
       `SELECT * FROM decisions WHERE project = ? AND status = ? ORDER BY created_at DESC`
-    ).all(project, status) as any[];
+    ).all(project, status) as DecisionRow[];
     return rows.map(this.parseDecision);
   }
 
@@ -686,12 +820,12 @@ export class SQLiteStore {
           `SELECT * FROM decisions WHERE project = ?
            AND (title LIKE ? OR description LIKE ? OR category LIKE ? OR tags LIKE ?)
            AND status = 'active' ORDER BY created_at DESC LIMIT 30`
-        ).all(project, like, like, like, like) as any[]
+        ).all(project, like, like, like, like) as DecisionRow[]
       : this.db.prepare(
           `SELECT * FROM decisions
            WHERE (title LIKE ? OR description LIKE ? OR category LIKE ? OR tags LIKE ?)
            AND status = 'active' ORDER BY created_at DESC LIMIT 30`
-        ).all(like, like, like, like) as any[];
+        ).all(like, like, like, like) as DecisionRow[];
     return rows.map(this.parseDecision);
   }
 
@@ -718,7 +852,7 @@ export class SQLiteStore {
 
     // Build SET clauses dynamically — only update fields present in `patch`.
     const sets: string[] = [];
-    const values: any[] = [];
+    const values: Array<string | number | null> = [];
 
     const scalarFields = [
       "category",
@@ -737,7 +871,11 @@ export class SQLiteStore {
     for (const f of scalarFields) {
       if (f in patch) {
         sets.push(`${f} = ?`);
-        values.push((patch as any)[f] ?? null);
+        // Dynamic field access over a known scalar-field allowlist. The value
+        // is bound as a SQLite scalar; this narrow cast is the one acceptable
+        // `as` here (see Gemini audit finding #1 — query-result casts removed).
+        const v = (patch as Record<string, unknown>)[f];
+        values.push((v as string | number | null) ?? null);
       }
     }
 
@@ -807,20 +945,31 @@ export class SQLiteStore {
   }
 
   private getDecisionById(id: number): Decision | undefined {
-    const row = this.db.prepare(`SELECT * FROM decisions WHERE id = ?`).get(id) as any;
+    const row = this.db.prepare(`SELECT * FROM decisions WHERE id = ?`).get(id) as
+      | DecisionRow
+      | undefined;
     return row ? this.parseDecision(row) : undefined;
   }
 
-  private parseDecision(row: any): Decision {
+  private parseDecision(row: DecisionRow): Decision {
     return {
       ...row,
+      status: row.status as Decision["status"],
+      rationale: row.rationale ?? undefined,
+      outcome_check_in: row.outcome_check_in ?? undefined,
+      outcome_status: row.outcome_status ?? undefined,
+      restore_step: row.restore_step ?? undefined,
+      next_step: row.next_step ?? undefined,
+      blocked_on: row.blocked_on ?? undefined,
+      supersedes_id: row.supersedes_id ?? undefined,
       tags: JSON.parse(row.tags || "[]"),
       trade_offs: row.trade_offs ? JSON.parse(row.trade_offs) : [],
       alternatives_considered: row.alternatives_considered
         ? JSON.parse(row.alternatives_considered)
         : [],
       related_decision_ids: row.relations ? JSON.parse(row.relations) : {},
-      verification_status: row.verification_status ?? "confirmed",
+      verification_status:
+        (row.verification_status as Decision["verification_status"]) ?? "confirmed",
       evidence_links: row.evidence_links
         ? JSON.parse(row.evidence_links)
         : [],
@@ -849,7 +998,9 @@ export class SQLiteStore {
     evidence_link: string,
     promote_to?: "evidence" | "confirmed"
   ): Lesson | null {
-    const row = this.db.prepare(`SELECT * FROM lessons WHERE id = ?`).get(id) as any;
+    const row = this.db.prepare(`SELECT * FROM lessons WHERE id = ?`).get(id) as
+      | LessonRow
+      | undefined;
     if (!row) return null;
 
     const links: NonNullable<Lesson["evidence_links"]> = row.evidence_links
@@ -861,7 +1012,8 @@ export class SQLiteStore {
       recorded_at: now(),
     });
 
-    let nextStatus: NonNullable<Lesson["verification_status"]> = row.verification_status ?? "claim";
+    let nextStatus: NonNullable<Lesson["verification_status"]> =
+      (row.verification_status as Lesson["verification_status"]) ?? "claim";
     if (promote_to) {
       nextStatus = promote_to;
     } else {
@@ -947,7 +1099,7 @@ export class SQLiteStore {
   ): PatternPromotion {
     const existing = this.db.prepare(
       `SELECT * FROM pattern_promotions WHERE pattern_key = ?`
-    ).get(pattern_key) as any;
+    ).get(pattern_key) as PatternPromotionRow | undefined;
 
     if (existing) {
       return {
@@ -963,7 +1115,7 @@ export class SQLiteStore {
     `).run(pattern_key, now(), JSON.stringify(promoted_from_projects), total_frequency);
 
     return {
-      id: info.lastInsertRowid as number,
+      id: safeRowid(info.lastInsertRowid),
       pattern_key,
       promoted_at: now(),
       promoted_from_projects,
@@ -974,7 +1126,7 @@ export class SQLiteStore {
   getPromotion(pattern_key: string): PatternPromotion | null {
     const row = this.db.prepare(
       `SELECT * FROM pattern_promotions WHERE pattern_key = ?`
-    ).get(pattern_key) as any;
+    ).get(pattern_key) as PatternPromotionRow | undefined;
     if (!row) return null;
     return {
       ...row,
@@ -1013,7 +1165,7 @@ export class SQLiteStore {
   getLessonsByPatternKey(pattern_key: string): Lesson[] {
     const rows = this.db.prepare(
       `SELECT * FROM lessons WHERE pattern_key = ? ORDER BY frequency DESC`
-    ).all(pattern_key) as any[];
+    ).all(pattern_key) as LessonRow[];
     return rows.map(this.parseLesson);
   }
 
@@ -1021,7 +1173,7 @@ export class SQLiteStore {
   getAllLessonsForProject(project: string): Lesson[] {
     const rows = this.db.prepare(
       `SELECT * FROM lessons WHERE project = ?`
-    ).all(project) as any[];
+    ).all(project) as LessonRow[];
     return rows.map(this.parseLesson);
   }
 
@@ -1038,25 +1190,31 @@ export class SQLiteStore {
       data.title, data.description, data.example ?? null,
       JSON.stringify(data.tags), data.applies_to, ts
     );
-    return this.getPatternById(info.lastInsertRowid as number)!;
+    return this.getPatternById(safeRowid(info.lastInsertRowid))!;
   }
 
   getPatterns(project?: string): Pattern[] {
     const rows = project
       ? this.db.prepare(
           `SELECT * FROM patterns WHERE applies_to = 'all' OR applies_to LIKE ? ORDER BY created_at DESC`
-        ).all(`%${project}%`) as any[]
-      : this.db.prepare(`SELECT * FROM patterns ORDER BY created_at DESC`).all() as any[];
+        ).all(`%${project}%`) as PatternRow[]
+      : this.db.prepare(`SELECT * FROM patterns ORDER BY created_at DESC`).all() as PatternRow[];
     return rows.map(this.parsePattern);
   }
 
   private getPatternById(id: number): Pattern | undefined {
-    const row = this.db.prepare(`SELECT * FROM patterns WHERE id = ?`).get(id) as any;
+    const row = this.db.prepare(`SELECT * FROM patterns WHERE id = ?`).get(id) as
+      | PatternRow
+      | undefined;
     return row ? this.parsePattern(row) : undefined;
   }
 
-  private parsePattern(row: any): Pattern {
-    return { ...row, tags: JSON.parse(row.tags || "[]") };
+  private parsePattern(row: PatternRow): Pattern {
+    return {
+      ...row,
+      example: row.example ?? undefined,
+      tags: JSON.parse(row.tags || "[]"),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -1073,14 +1231,14 @@ export class SQLiteStore {
   getPreference(project: string, key: string): string | undefined {
     const row = this.db.prepare(
       `SELECT value FROM preferences WHERE project = ? AND key = ?`
-    ).get(project, key) as any;
+    ).get(project, key) as Pick<Preference, "value"> | undefined;
     return row?.value;
   }
 
   getAllPreferences(project: string): Record<string, string> {
     const rows = this.db.prepare(
       `SELECT key, value FROM preferences WHERE project = ?`
-    ).all(project) as any[];
+    ).all(project) as Array<Pick<Preference, "key" | "value">>;
     return Object.fromEntries(rows.map((r) => [r.key, r.value]));
   }
 
@@ -1134,10 +1292,11 @@ export class SQLiteStore {
     if (all || types.includes("bootstrap")) {
       result.preferences = this.getAllPreferences(project);
       if (!result.lessons.length) {
-        result.lessons = this.db.prepare(
+        const bootstrapRows = this.db.prepare(
           `SELECT * FROM lessons WHERE project = ? AND severity IN ('high','critical')
            ORDER BY created_at DESC LIMIT 10`
-        ).all(project).map(this.parseLesson);
+        ).all(project) as LessonRow[];
+        result.lessons = bootstrapRows.map(this.parseLesson);
       }
     }
 

@@ -15,6 +15,19 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { createRequire } from "node:module";
+
+// Read the version from package.json at runtime so the MCP server's reported
+// version never drifts from the published package — the official MCP registry
+// requires server.json version to match the npm version exactly.
+const PKG_VERSION: string = (() => {
+  try {
+    const require = createRequire(import.meta.url);
+    return (require("../package.json") as { version: string }).version;
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 import { SQLiteStore } from "./storage.js";
 import {
@@ -514,7 +527,7 @@ async function runMcpServer(): Promise<void> {
   process.stderr.write(summary + "\n");
 
   const server = new Server(
-    { name: "claude-amplifier", version: "1.5.0" },
+    { name: "claude-amplifier", version: PKG_VERSION },
     { capabilities: { tools: {} } }
   );
 

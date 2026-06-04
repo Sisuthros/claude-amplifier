@@ -27,13 +27,19 @@ const CONTEXT_LESSONS_POOL_LIMIT = 200; // fetch this many before ranking
 type PriorityMode = "smart" | "recent" | "frequency";
 
 /**
- * Cheap token estimate: ~4 chars per token. We deliberately avoid a real
- * tokenizer dependency — this runs on every session start and the goal is
+ * Cheap token estimate: ~4 UTF-8 *bytes* per token. We deliberately avoid a
+ * real tokenizer dependency — this runs on every session start and the goal is
  * "don't drown the context", not exact accounting.
+ *
+ * Counting bytes rather than `text.length` (JS code units) matters: Finnish
+ * ä/ö, emoji, CJK and dense code paths are multi-byte and were badly
+ * under-counted by length/4. Under-counting is the dangerous direction — it
+ * lets context_load overfill the budget and blow the window. Bytes/4 tracks
+ * real tokenization far better for non-ASCII while staying dependency-free.
  */
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  return Math.ceil(Buffer.byteLength(text, "utf8") / 4);
 }
 
 /**
