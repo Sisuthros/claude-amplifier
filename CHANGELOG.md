@@ -2,6 +2,59 @@
 
 All notable changes to Claude Amplifier are documented here.
 
+## [1.5.1] — 2026-06-04 — Hardening & discoverability
+
+A type-safety, concurrency, and discoverability pass. No behavior changes to
+any tool — every public API is identical to 1.5.0. This release exists to make
+the storage layer harder to break under real concurrent use and to make the
+package findable from the official MCP registry.
+
+### Added
+
+- **`mcpName` field** (`io.github.sisuthros/claude-amplifier`) so the package
+  can be published to the official MCP registry
+  (`registry.modelcontextprotocol.io`), which downstream directories sync from.
+- **`SQLiteStore.pragmas()`** — exposes the live connection's `busy_timeout`,
+  `journal_mode`, and `foreign_keys` for diagnostics (`doctor`) and tests, so
+  the concurrency hardening can be verified rather than assumed.
+- **`safeRowid()`** — converts a BigInt `lastInsertRowid` to a JS number,
+  throwing rather than silently truncating above 2^53. A wrong id that looks
+  right is exactly the failure class this tool exists to prevent.
+
+### Changed
+
+- **Concurrency hardening.** The SQLite connection now opens with
+  `{ timeout: 5000 }` plus a `busy_timeout = 5000` pragma. With two writers
+  (Claude Desktop + Claude Code, or a SessionEnd hook firing mid-session) a
+  same-instant write previously risked `SQLITE_BUSY`; the driver now retries
+  for up to 5s before failing. WAL mode is unchanged.
+- **UTF-8-aware token estimate.** `estimateTokens` now counts UTF-8 *bytes* / 4
+  instead of `string.length` / 4. Finnish ä/ö, emoji, CJK, and dense code paths
+  were badly under-counted before — the dangerous direction, since it let
+  `context_load` overfill the budget. Still dependency-free.
+- **Type safety in `storage.ts`.** All 23 `as any` casts on SQLite query
+  results replaced with precise row interfaces (`LessonRow`, `DecisionRow`,
+  `PatternRow`, …). No new dependency — still exactly
+  `@modelcontextprotocol/sdk` + `better-sqlite3`.
+
+### Security
+
+- **SQL-injection audit (clean).** Every dynamic SQL construction site was
+  reviewed before this release. The three interpolated sites use only hardcoded
+  literals (migrations), an `as const` column allowlist with `?`-bound values
+  (decision update), or interpolation inside a bound LIKE *value* — never
+  user-controlled identifiers. All other queries are parameterized.
+
+### Tests
+
+- 162 tests pass (was 152). New: `sqlite_concurrency.test.js` (2),
+  `safe_rowid.test.js` (4), `token_estimate.test.js` (4).
+
+### Backwards compatibility
+
+- Fully compatible with 1.5.0 databases and config. Type-only and
+  reliability changes; no schema migration, no tool signature changes.
+
 ## [1.5.0] — 2026-05-26 — Trust Rebuild
 
 ### Why this release exists
