@@ -24,3 +24,9 @@ Thumbs.db
 
 # npm audit output captured during local pre-release checks
 npm-audit-*.txt
+
+# Generated operating artifacts from .claude/skills/* (triage / release /
+# write-failure reports). Per-run; may contain local paths or project data.
+# Keep the dir + its README; ignore the generated outputs.
+knowledge/*
+!knowledge/README.md

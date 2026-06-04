@@ -146,6 +146,30 @@ The Amplifier database is a record of what was learned, including what
 was learned to be wrong. Silent corrections rot the trust the tool
 depends on.
 
+## Task-specific skills
+
+This file is the **doctrine** — the *why* and the values. The executable
+*how* for specific recurring tasks lives next to it as operating cards in
+`.claude/skills/<name>/SKILL.md`. Each card is a short, step-by-step
+procedure with a verification rule and (usually) a required output
+artifact.
+
+When a task matches one of these, **prefer the skill before improvising** —
+the card already encodes the gotchas you'd otherwise rediscover:
+
+| Skill | Use when |
+|---|---|
+| `triage-stale-memory` | `amplify_context_load` reports stale memory files. |
+| `record-verified-lesson` | You believe you've learned something (routes it through claim → evidence → confirmed). |
+| `investigate-write-failure` | A tool returns `ERROR: Lesson/Decision NOT recorded`. |
+| `add-mcp-tool` | You're adding or modifying an MCP tool. |
+| `release-npm-version` | You're about to publish a new npm version. |
+| `design-memory-eval` | You're changing the Oracle, stale-memory detection, verification gating, or write-verification. |
+
+The doctrine tells you what to value; the skill tells you the exact moves.
+If a skill and this file ever disagree, the value at the top of this file
+still wins — and the skill should be edited to match.
+
 ## Common gotchas
 
 These are the failure modes other operators (and I) have hit. Each one
