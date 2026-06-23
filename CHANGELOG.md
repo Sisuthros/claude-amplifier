@@ -2,6 +2,43 @@
 
 All notable changes to Claude Amplifier are documented here.
 
+## [1.6.0] — 2026-06-23 — Auto-capture
+
+Adds four read-only "auto-capture" tools that help surface, deduplicate, and
+maintain lessons without ever mutating the database. They suggest what to save
+and what has gone stale; the existing `amplify_learn` / `amplify_record_claim`
+tools remain the only writers. The public tool count grows from 13 to 17, and
+the test suite grows from 277 to 309 tests (all passing).
+
+### Added
+
+- **`amplify_capture_session`** — scans a block of recent conversation text with
+  five deterministic Finnish+English regex triggers (frustration, explicit
+  importance, success, prohibition, forward-looking decision), classifies each
+  first match into a type/severity, and returns capture suggestions with ±100-char
+  context snippets. Read-only: it suggests, it never saves.
+- **`amplify_dedup_check`** — checks whether a lesson you are about to save
+  already exists, using deterministic word-token Jaccard overlap (no embeddings,
+  no model call). Returns the top-5 closest matches with similarity scores and
+  flags likely duplicates at ≥0.7 so a frequency-bump lands on the right row.
+- **`amplify_recent_patterns`** — surfaces the most active `pattern_key`s in a
+  recent time window, grouped with summed frequency, lesson count, and the set of
+  types, so you can see what keeps biting you. Read-only.
+- **`amplify_decay_old`** — reports cold lesson candidates (stale, low-frequency,
+  non-critical) for memory maintenance. Currently **report-only** — it performs
+  no write even with `dry_run: false` (critical lessons never decay).
+
+All four are non-mutating and dependency-free; the shared building blocks live in
+`src/auto-capture-helpers.ts` and are unit-tested in isolation.
+
+### Changed
+
+- **`.gitattributes`** added to normalize line endings to LF on checkout
+  independent of each developer's `core.autocrlf`, keeping the
+  `.claude/skills/**/SKILL.md` operating cards LF on Windows/CI/Linux. The
+  `skills_present` test is now CRLF-tolerant, so a Windows checkout no longer
+  fails `prepublishOnly` on stray `\r` in skill-card frontmatter.
+
 ## [1.5.3] — 2026-06-05 — Official MCP Registry
 
 Publishes Claude Amplifier to the [official MCP Registry](https://registry.modelcontextprotocol.io).

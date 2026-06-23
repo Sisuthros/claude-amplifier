@@ -1,0 +1,29 @@
+# Normalize line endings so text files are LF in the repo and on checkout,
+# independent of each developer's core.autocrlf setting. This keeps the
+# .claude/skills/**/SKILL.md operating cards LF on Windows/CI/Linux alike,
+# which the skills_present test depends on for clean frontmatter parsing.
+
+# Default: auto-detect text, but commit and check out with LF.
+* text=auto eol=lf
+
+# Markdown — always LF (skills cards, docs, README, CLAUDE.md, etc.).
+*.md text eol=lf
+.claude/skills/**/*.md text eol=lf
+
+# Source / config files — explicit LF.
+*.ts text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+# Binary files — never normalize.
+*.tgz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

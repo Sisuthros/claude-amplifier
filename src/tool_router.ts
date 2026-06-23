@@ -27,6 +27,11 @@ import {
   handleAuditFreshness,
   handleSuggestPatternKey,
   handlePromoteFromMemoryMd,
+  // v1.6.0 — auto-capture
+  handleCaptureSession,
+  handleDedupCheck,
+  handleRecentPatterns,
+  handleDecayOld,
 } from "./tools.js";
 
 /**
@@ -99,6 +104,19 @@ export async function dispatchToolCall(
         break;
       case "amplify_promote_from_memory_md":
         text = await handlePromoteFromMemoryMd(store, args as Record<string, unknown>);
+        break;
+      // v1.6.0 — auto-capture
+      case "amplify_capture_session":
+        text = await handleCaptureSession(store, args as Record<string, unknown>);
+        break;
+      case "amplify_dedup_check":
+        text = await handleDedupCheck(store, args as Record<string, unknown>);
+        break;
+      case "amplify_recent_patterns":
+        text = await handleRecentPatterns(store, args as Record<string, unknown>);
+        break;
+      case "amplify_decay_old":
+        text = await handleDecayOld(store, args as Record<string, unknown>);
         break;
       default:
         text = `Error: unknown tool '${name}'.`;

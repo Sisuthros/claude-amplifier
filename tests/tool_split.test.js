@@ -53,12 +53,17 @@ const EXPECTED_TOOL_NAMES = [
   "amplify_promote_from_memory_md",
   "amplify_suggest_pattern_key",
   "amplify_audit_freshness",
+  // v1.6.0 — auto-capture
+  "amplify_capture_session",
+  "amplify_dedup_check",
+  "amplify_recent_patterns",
+  "amplify_decay_old",
 ];
 
 describe("tool_schemas.ts — TOOLS array (P1 #6)", () => {
-  test("exports all 13 tools in the original order", () => {
+  test("exports all 17 tools in the original order", () => {
     assert.ok(Array.isArray(TOOLS), "TOOLS must be an array");
-    assert.equal(TOOLS.length, 13);
+    assert.equal(TOOLS.length, 17);
     assert.deepEqual(
       TOOLS.map((t) => t.name),
       EXPECTED_TOOL_NAMES,

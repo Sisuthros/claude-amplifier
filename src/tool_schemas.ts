@@ -567,4 +567,117 @@ export const TOOLS = [
       },
     },
   },
+  {
+    name: "amplify_capture_session",
+    description:
+      "Scans a block of recent conversation text for moments worth saving as lessons — frustration, explicit 'this is important', success, prohibitions, and forward-looking decisions. Runs 5 deterministic Finnish+English regex triggers over `recent_messages`, classifies each first match into a type/severity (frustration→mistake/high, importance→insight/high, success→success/medium, prohibition→mistake/critical, forward-decision→decision/medium), and extracts a ±100-character context snippet. It does NOT save anything and does NOT touch the database — it only suggests what to capture, returning JSON { project, triggers_detected, suggestions[], summary, workflow[] } where each suggestion names the type/severity, the matched snippet, and the next tool to call. Use it proactively at the end of a working session or right after the user shows strong signal (anger, 'never do X', 'remember this'), BEFORE the context is lost. Pair it with amplify_suggest_pattern_key (to pick the pattern_key) and then amplify_learn / amplify_record_claim to actually persist; run amplify_dedup_check first to avoid duplicating an existing lesson. Example: amplify_capture_session({ project: 'chimera-prime', recent_messages: '...älä koskaan committaa .env...' }) detects a prohibition trigger and suggests a mistake/critical lesson.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Required. Project name to attribute detected lessons to (e.g. 'chimera-prime'); use the same name as in amplify_bootstrap / amplify_learn.",
+        },
+        recent_messages: {
+          type: "string",
+          description:
+            "Required. Raw recent conversation text to scan. Can be multiple turns concatenated; newlines are tolerated (snippets collapse them). Only the first match of each of the 5 triggers is reported.",
+        },
+        triggers_found: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Caller-flagged snippets to force-include as user-flagged / high-severity suggestions even if no built-in regex matched them. Useful when you noticed something the regexes would miss.",
+        },
+      },
+      required: ["project", "recent_messages"],
+    },
+  },
+  {
+    name: "amplify_dedup_check",
+    description:
+      "Checks whether a lesson you are about to save already exists, using deterministic word-token Jaccard overlap (no embeddings, no model call). Compares '<title> <description>' against every lesson in the project, returns the top-5 closest matches with similarity scores, and flags is_likely_duplicate=true when the closest match scores at or above 0.7. Returns JSON { is_likely_duplicate, duplicates[{id,title,pattern_key,frequency,type,similarity}], recommendation }. Read-only; it never writes. Use it BEFORE writing a new lesson so a frequency-bump lands on the right existing row instead of creating a near-duplicate. It complements amplify_suggest_pattern_key (which proposes the key to reuse) and feeds amplify_learn / amplify_record_claim (reuse the duplicate's pattern_key to bump its frequency). Example: amplify_dedup_check({ project: 'chimera-prime', title: 'Read docs before coding' }) → { is_likely_duplicate: true, duplicates: [{ pattern_key: 'read-docs-before-coding', similarity: 0.82, ... }] }.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description:
+            "Required. Title of the lesson you intend to save. Primary text for the similarity comparison.",
+        },
+        description: {
+          type: "string",
+          description:
+            "Optional. Body/description of the intended lesson; concatenated with the title to improve match accuracy when present.",
+        },
+        project: {
+          type: "string",
+          description:
+            "Optional. Restrict the duplicate search to this project. Omit to search the default (empty-project) pool.",
+        },
+        threshold: {
+          type: "number",
+          description:
+            "Optional. Minimum Jaccard similarity (0–1) for a lesson to be reported as a candidate. Default 0.5. The is_likely_duplicate flag uses a fixed 0.7 cutoff and is independent of this threshold.",
+        },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "amplify_recent_patterns",
+    description:
+      "Surfaces which lesson pattern_keys have been most active recently, so you can see what keeps biting you. Filters the project's lessons to those updated within the last N days, groups them by pattern_key (keyless lessons get a synthetic '(no-key: <id>)' bucket), sums frequency, counts lessons, and tracks the latest update plus the set of types per group. Returns JSON { window_days, total_recent_lessons, top_patterns[{pattern_key,total_frequency,lesson_count,sample_title,latest_update,latest_ms,types[]}], insight }, sorted by total_frequency descending. Read-only; no writes. Use it at session start or during a retro to decide what to reinforce or refactor, and to spot a recurring pattern_key before it grows further. It complements amplify_context_load (raw rows) and amplify_suggest_pattern_key (key reuse); a hot pattern here is a strong hint to keep using its existing key. Example: amplify_recent_patterns({ project: 'chimera-prime', days: 7, limit: 10 }) → top_patterns[0] = { pattern_key: 'verify-before-disagreeing', total_frequency: 12, lesson_count: 4, ... }.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Optional. Restrict to this project. Omit to use the default (empty-project) pool.",
+        },
+        days: {
+          type: "number",
+          description:
+            "Optional. Look-back window in days (positive; coerced to an integer). Lessons whose updated_at (or created_at) falls within this window are included. Default 7.",
+        },
+        limit: {
+          type: "number",
+          description:
+            "Optional. Max number of pattern groups to return (positive integer, capped at 50). Default 10.",
+        },
+      },
+    },
+  },
+  {
+    name: "amplify_decay_old",
+    description:
+      "Reports which lessons have gone cold (stale, low-frequency, non-critical) and could be decayed/archived, so the warm set stays signal-dense. A lesson is a cold candidate when its last-seen timestamp (updated_at or created_at) is older than cold_threshold_days, its frequency is below min_frequency_to_keep_warm, and its severity is NOT 'critical' (critical lessons never decay). Returns JSON { dry_run, cold_threshold_days, min_frequency_to_keep_warm, would_mark_cold_count, sample[≤10], note }. IMPORTANT: this is currently REPORT-ONLY — it performs NO write even when dry_run=false (cold-marking needs a future cold_at column + storage UPDATE). Treat the output as a recommendation, not a mutation. Use it during memory maintenance to find decay candidates; it is the inverse of amplify_recent_patterns (what's hot), and you can inspect candidates with amplify_context_load before any manual demote. Example: amplify_decay_old({ project: 'chimera-prime', cold_threshold_days: 60, dry_run: true }) → { would_mark_cold_count: 7, sample: [{ id, title, age_days: 92, frequency: 1 }], note: 'report-only…' }.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Optional. Restrict to this project. Omit to use the default (empty-project) pool.",
+        },
+        cold_threshold_days: {
+          type: "number",
+          description:
+            "Optional. A lesson is cold only if it has not been seen for more than this many days (positive; coerced to an integer). Default 60.",
+        },
+        min_frequency_to_keep_warm: {
+          type: "number",
+          description:
+            "Optional. Lessons with frequency at or above this stay warm regardless of age (positive; coerced to an integer). Default 3.",
+        },
+        dry_run: {
+          type: "boolean",
+          description:
+            "Optional. Default true. NOTE: currently has no effect — the tool never writes (report-only); the flag is reserved for the future cold-marking implementation.",
+        },
+      },
+    },
+  },
 ];
