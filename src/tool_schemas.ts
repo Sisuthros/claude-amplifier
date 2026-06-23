@@ -38,35 +38,40 @@ export const TOOLS = [
         },
         context: {
           type: "string",
-          description: "Surrounding circumstances (optional).",
+          description:
+            "Optional. The situation surrounding the lesson — where/when it came up (distinct from `description`, which is the lesson itself).",
         },
         resolution: {
           type: "string",
-          description: "How the issue was resolved (optional).",
+          description:
+            "Optional. How the issue was resolved or what made the success work (the concrete fix/action).",
         },
         prevention: {
           type: "string",
-          description: "How to avoid this in future (optional).",
+          description:
+            "Optional. How to avoid the mistake / reproduce the success next time — the actionable takeaway.",
         },
         severity: {
           type: "string",
           enum: ["low", "medium", "high", "critical"],
-          description: "Impact level. Defaults to 'medium'.",
+          description:
+            "Optional. Impact level: 'low' | 'medium' | 'high' | 'critical'. Defaults to 'medium'.",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "Tags for filtering (optional).",
+          description:
+            "Optional. Lowercase keyword tags for later filtering/retrieval (e.g. [\"config\", \"hot-reload\"]).",
         },
         trigger: {
           type: "string",
           description:
-            "The specific situation or action that triggers this lesson — useful for pattern detection (optional).",
+            "Optional. The signal that should resurface this lesson later — e.g. an error string or task type the Pattern Oracle matches against.",
         },
         pattern_key: {
           type: "string",
           description:
-            "v1.2.0 — explicit pattern grouping key (e.g. 'read-docs-before-coding'). When set, recording another lesson with the same key for this project bumps a frequency counter instead of creating a duplicate. Use this when the same lesson recurs with different wording each time. (optional)",
+            "Optional. Explicit pattern grouping key (e.g. 'read-docs-before-coding'). Recording another lesson with the same key in this project bumps a frequency counter instead of creating a duplicate — use it when the same lesson recurs with different wording. Call amplify_suggest_pattern_key first to reuse an existing key.",
         },
       },
       required: ["project", "title", "description"],
@@ -102,24 +107,27 @@ export const TOOLS = [
         category: {
           type: "string",
           description:
-            "Decision category (e.g. 'architecture', 'tooling', 'security'). Defaults to 'general'.",
+            "Free-text decision category for grouping (e.g. 'architecture', 'tooling', 'security', 'process'). Optional for op=track; defaults to 'general'.",
         },
         title: {
           type: "string",
-          description: "Short decision title. Required for track.",
+          description:
+            "Short one-line decision title (e.g. 'Use CockroachDB instead of Postgres'). Required for op=track.",
         },
         description: {
           type: "string",
-          description: "Full description. Required for track.",
+          description:
+            "Full description of the decision — what was decided, in enough detail to act on later. Required for op=track.",
         },
         rationale: {
           type: "string",
-          description: "Why this decision was made (optional).",
+          description: "Optional. Why this decision was made — the reasoning behind it.",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "Tags (optional).",
+          description:
+            "Optional. Lowercase keyword tags for retrieval/filtering (e.g. [\"db\", \"migration\"]).",
         },
         query: {
           type: "string",
@@ -158,12 +166,14 @@ export const TOOLS = [
         trade_offs: {
           type: "array",
           items: { type: "string" },
-          description: "Tradeoffs accepted when choosing this decision.",
+          description:
+            "Optional. The downsides accepted when choosing this decision (one string per trade-off).",
         },
         alternatives_considered: {
           type: "array",
           items: { type: "string" },
-          description: "Alternatives considered and rejected.",
+          description:
+            "Optional. Other options weighed and rejected (one string per alternative), so the road-not-taken is recorded.",
         },
         supersedes: {
           type: "number",
@@ -236,23 +246,25 @@ export const TOOLS = [
   {
     name: "amplify_link_decisions",
     description:
-      "v1.2.0 — Add a knowledge-graph link between two existing decisions. Lightweight: one call = one link. Idempotent.",
+      "Adds a single directed knowledge-graph edge between two decisions that ALREADY EXIST in the decision log — a lightweight relation (one call = one link), NOT a supersede/replace. Use this to connect related decisions for later traversal; do NOT use it to create a decision or to replace one. When a new choice REPLACES an old decision use amplify_decisions (op=track with `supersedes`, or op=supersede); when you only refine the same decision use amplify_decisions op=update. Prerequisite: both `from` and `to` must reference already-recorded decision ids. Behaviour: this is a write that mutates only the `from` decision's link set (the `to` decision is untouched); on success it returns a confirmation like \"Linked decision #<from> --<relation>--> #<to>\", and if `from`/`to` does not exist or an id/relation is invalid it returns an Error string (not an exception). Re-running the same link is an idempotent no-op.",
     inputSchema: {
       type: "object",
       properties: {
         from: {
           type: "number",
-          description: "ID of the decision that holds the link.",
+          description:
+            "Id of the existing source decision that holds the link (must already be recorded). Example: link #12 (a bug) --caused--> #15 (its fix): set from=12, to=15, relation=\"caused\".",
         },
         to: {
           type: "number",
-          description: "ID of the decision being linked to.",
+          description:
+            "Id of the existing target decision being linked to (must already be recorded; left untouched by this call).",
         },
         relation: {
           type: "string",
           enum: ["triggered_by", "caused", "relates_to"],
           description:
-            "Relation type: triggered_by=this was caused by `to`; caused=this led to `to`; relates_to=loose association.",
+            "Edge type from `from` to `to`: 'triggered_by' = `from` was caused by `to`; 'caused' = `from` led to `to`; 'relates_to' = loose association. Direction matters — see the worked example in `from`.",
         },
       },
       required: ["from", "to", "relation"],
@@ -308,7 +320,7 @@ export const TOOLS = [
   {
     name: "amplify_preflight",
     description:
-      "v1.4.0 — Pre-task risk gate: before starting work, scans this project's stored lessons, active decisions, and promoted pattern signals for ones that match the task description, so you can surface known failure modes before repeating them. It tokenizes the prompt (plus optional context), weights matches by frequency and verification status, and returns risk_level (low/medium/high/critical), a numeric score, evidence_quality, the matched patterns/lessons/decisions (top 5 each), and a suggested_approach advice string. Call this FIRST when a task touches a familiar or previously-problematic area; skip it for trivial work or when there is no relevant project history yet. It is read-only and complements amplify_bootstrap (full session context) — use preflight for a fast, targeted 'have I broken this before?' check rather than loading everything. Requires 'project' and a task description ('prompt' or its alias 'task').",
+      "Pre-task risk gate: before starting work, scans this project's stored lessons, active decisions, and promoted pattern signals for ones that match the task description, so you can surface known failure modes before repeating them. It tokenizes the prompt (plus optional context), weights matches by frequency and verification status, and returns risk_level (low/medium/high/critical), a numeric score, evidence_quality, the matched patterns/lessons/decisions (top 5 each), and a suggested_approach advice string. Call this FIRST when a task touches a familiar or previously-problematic area; skip it for trivial work or when there is no relevant project history yet. It is read-only and complements amplify_bootstrap (full session context) — use preflight for a fast, targeted 'have I broken this before?' check rather than loading everything. Requires 'project' and a task description ('prompt' or its alias 'task').",
     inputSchema: {
       type: "object",
       properties: {
@@ -339,7 +351,7 @@ export const TOOLS = [
   {
     name: "amplify_record_claim",
     description:
-      "v1.4.0 — Records a lesson as an UNVERIFIED claim so that 'I just learned X' insights are captured immediately without being treated as confirmed truth. Use this for any takeaway not yet backed by tests, commits, docs, or explicit user confirmation; it inserts the lesson with verification_status=\"claim\" at confidence 0.5 (override via initial_confidence). Returns the new lesson id, its status/confidence, title, resolved pattern_key, and a ready-to-use amplify_verify_claim hint; if a matching claim already exists (deduped by pattern_key/title) it frequency-bumps that one instead of creating a duplicate. Promote it later with amplify_verify_claim once evidence appears (1 evidence → confidence 0.7, user_confirmation or ≥2 evidence types → confirmed 1.0). Prefer amplify_learn only for already-confirmed or legacy records; pass pattern_key to aggregate recurring lessons across differently-worded variants.",
+      "Records a lesson as an UNVERIFIED claim so that 'I just learned X' insights are captured immediately without being treated as confirmed truth. Use this for any takeaway not yet backed by tests, commits, docs, or explicit user confirmation; it inserts the lesson with verification_status=\"claim\" at confidence 0.5 (override via initial_confidence). Returns the new lesson id, its status/confidence, title, resolved pattern_key, and a ready-to-use amplify_verify_claim hint; if a matching claim already exists (deduped by pattern_key/title) it frequency-bumps that one instead of creating a duplicate. Promote it later with amplify_verify_claim once evidence appears (1 evidence → confidence 0.7, user_confirmation or ≥2 evidence types → confirmed 1.0). Prefer amplify_learn only for already-confirmed or legacy records; pass pattern_key to aggregate recurring lessons across differently-worded variants.",
     inputSchema: {
       type: "object",
       properties: {
@@ -413,7 +425,7 @@ export const TOOLS = [
   {
     name: "amplify_verify_claim",
     description:
-      "v1.4.0 — Attach a piece of evidence to an existing lesson and (re)compute its verification status, raising Amplifier's confidence in what it 'knows'. Each call appends one evidence link to the lesson's evidence chain, then promotes status by these rules: any evidence → 'evidence' (confidence 0.7); a 'user_confirmation' evidence OR ≥2 distinct evidence types → 'confirmed' (confidence 1.0); pass promote_to to override the auto-rule. Returns the lesson id, its new status and confidence, the total number of accumulated evidence links, and the latest evidence just added; returns an error if the lesson id does not exist. Use it when a claim gets backed by reality — tests pass, a commit lands, a doc confirms it, or the user explicitly confirms. The target lesson must already exist (created via amplify_record_claim for unverified claims, or amplify_learn_from_mistake); use amplify_evidence_chain afterward to audit why a lesson reached 'confirmed'.",
+      "Attach a piece of evidence to an existing lesson and (re)compute its verification status, raising Amplifier's confidence in what it 'knows'. Each call appends one evidence link to the lesson's evidence chain, then promotes status by these rules: any evidence → 'evidence' (confidence 0.7); a 'user_confirmation' evidence OR ≥2 distinct evidence types → 'confirmed' (confidence 1.0); pass promote_to to override the auto-rule. Returns the lesson id, its new status and confidence, the total number of accumulated evidence links, and the latest evidence just added; returns an error if the lesson id does not exist. Use it when a claim gets backed by reality — tests pass, a commit lands, a doc confirms it, or the user explicitly confirms. The target lesson must already exist (created via amplify_record_claim for unverified claims, or amplify_learn_from_mistake); use amplify_evidence_chain afterward to audit why a lesson reached 'confirmed'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -452,7 +464,7 @@ export const TOOLS = [
   {
     name: "amplify_promote_pattern",
     description:
-      "v1.4.0 — Promotes a per-project pattern_key (a recurring lesson signature, e.g. \"read-docs-before-coding\") to GLOBAL scope so it counts more heavily in cross-project Pattern Oracle scoring and applies across all Amplifier projects. Validates eligibility before acting: the key must exist in stored lessons, appear in ≥2 distinct projects, and have ≥1 lesson with verification_status 'confirmed' — otherwise it returns a specific error (e.g. only-1-project, or \"verify a lesson first via amplify_verify_claim\") and promotes nothing. On success it records the promotion (idempotent: re-calling the same key returns the existing record, never duplicates) and returns a text summary with the pattern key, the source projects it was promoted from, the aggregated total frequency, and the new promotion id. Use this once a pattern has clearly proven itself across multiple projects and you want it to influence guidance everywhere; do NOT use it for project-specific lessons (those stay local via amplify_learn_from_mistake with a pattern_key). To author a brand-new global rule directly without project history, use amplify_global_patterns instead; to inspect a lesson's supporting evidence before promoting, use amplify_evidence_chain.",
+      "Promotes a per-project pattern_key (a recurring lesson signature, e.g. \"read-docs-before-coding\") to GLOBAL scope so it counts more heavily in cross-project Pattern Oracle scoring and applies across all Amplifier projects. Validates eligibility before acting: the key must exist in stored lessons, appear in ≥2 distinct projects, and have ≥1 lesson with verification_status 'confirmed' — otherwise it returns a specific error (e.g. only-1-project, or \"verify a lesson first via amplify_verify_claim\") and promotes nothing. On success it records the promotion (idempotent: re-calling the same key returns the existing record, never duplicates) and returns a text summary with the pattern key, the source projects it was promoted from, the aggregated total frequency, and the new promotion id. Use this once a pattern has clearly proven itself across multiple projects and you want it to influence guidance everywhere; do NOT use it for project-specific lessons (those stay local via amplify_learn_from_mistake with a pattern_key). To author a brand-new global rule directly without project history, use amplify_global_patterns instead; to inspect a lesson's supporting evidence before promoting, use amplify_evidence_chain.",
     inputSchema: {
       type: "object",
       properties: {
@@ -468,7 +480,7 @@ export const TOOLS = [
   {
     name: "amplify_evidence_chain",
     description:
-      "v1.4.0 — Audit WHY Amplifier trusts a stored lesson or decision by surfacing its evidence chain. Read-only: looks up the record by id, then returns a formatted text report with its title, verification_status (claim → evidence → confirmed), confidence score, and every linked piece of evidence (each shown as evidence_type @ recorded_at: link, where evidence_type is one of git_commit, test_run, user_confirmation, external_doc, or manual_review). Use this when you need to justify or double-check a claim before relying on it, or to investigate why a record reached 'confirmed' status; pre-1.4.0 records have no links and are reported as confirmed-by-default. This inspects existing records only — it does not add or verify evidence (use amplify_verify_claim to promote a claim), and it pairs with amplify_get_lessons / amplify_get_decisions to fetch the id you pass in. Returns an error string if the id is missing/non-numeric or the record is not found.",
+      "Audit WHY Amplifier trusts a stored lesson or decision by surfacing its evidence chain. Read-only: looks up the record by id, then returns a formatted text report with its title, verification_status (claim → evidence → confirmed), confidence score, and every linked piece of evidence (each shown as evidence_type @ recorded_at: link, where evidence_type is one of git_commit, test_run, user_confirmation, external_doc, or manual_review). Use this when you need to justify or double-check a claim before relying on it, or to investigate why a record reached 'confirmed' status; pre-1.4.0 records have no links and are reported as confirmed-by-default. This inspects existing records only — it does not add or verify evidence (use amplify_verify_claim to promote a claim), and it pairs with amplify_get_lessons / amplify_get_decisions to fetch the id you pass in. Returns an error string if the id is missing/non-numeric or the record is not found.",
     inputSchema: {
       type: "object",
       properties: {
@@ -491,7 +503,7 @@ export const TOOLS = [
   {
     name: "amplify_promote_from_memory_md",
     description:
-      "v1.5.0 — Retroactively triage a single memory/<YYYY-MM-DD>.md session log into reviewable amplify_learn / amplify_decisions drafts, so work that was logged but never recorded (the classic 'previous session did 200+ tool calls but called no Amplifier tool') isn't silently lost. It parses the file's event lines (`### HH:MM — Tool/Terminal/Wrote: …`) and applies three heuristics: architectural Wrote: paths (plan/decision/architecture/blueprint/design/manifesto/spec/adr) become decision candidates, any hour with >50 events becomes an intense-session insight, and the same tool/terminal call repeated ≥8× becomes a possible repeated-failure mistake. Returns a human-readable report listing each draft with its kind, confidence score, suggested type (decision/insight/mistake), description, and evidence lines, ranked by score — and explicitly writes NOTHING to SQLite. Use it after amplify_audit_freshness flags a stale day (or whenever you suspect unrecorded work); then YOU review the drafts and call amplify_learn_from_mistake or amplify_track_decision for the ones worth keeping. If no lines match the heuristics it reports zero candidates rather than inventing entries.",
+      "Retroactively triage a single memory/<YYYY-MM-DD>.md session log into reviewable amplify_learn / amplify_decisions drafts, so work that was logged but never recorded (the classic 'previous session did 200+ tool calls but called no Amplifier tool') isn't silently lost. It parses the file's event lines (`### HH:MM — Tool/Terminal/Wrote: …`) and applies three heuristics: architectural Wrote: paths (plan/decision/architecture/blueprint/design/manifesto/spec/adr) become decision candidates, any hour with >50 events becomes an intense-session insight, and the same tool/terminal call repeated ≥8× becomes a possible repeated-failure mistake. Returns a human-readable report listing each draft with its kind, confidence score, suggested type (decision/insight/mistake), description, and evidence lines, ranked by score — and explicitly writes NOTHING to SQLite. Use it after amplify_audit_freshness flags a stale day (or whenever you suspect unrecorded work); then YOU review the drafts and call amplify_learn_from_mistake or amplify_track_decision for the ones worth keeping. If no lines match the heuristics it reports zero candidates rather than inventing entries.",
     inputSchema: {
       type: "object",
       properties: {
@@ -507,7 +519,7 @@ export const TOOLS = [
   {
     name: "amplify_suggest_pattern_key",
     description:
-      "v1.5.0 — Before recording a recurring lesson, suggest which existing pattern_key to reuse (or propose a fresh one) so that the frequency counter actually aggregates instead of splitting one lesson across two near-duplicate keys. Read-only: it queries the project's stored lessons, scores every existing pattern_key by trigram (character-3-gram) Jaccard similarity against your title+description, and returns up to 3 matches above the 0.3 threshold — each with its similarity score, current frequency, and an example title. If nothing clears the threshold it returns a single proposed new key (a boring, hyphenated slug of the title, max 5 words). Call this immediately before amplify_learn_from_mistake whenever the mistake is a recurring pattern you suspect a previous session may have already coined a key for; then pass the chosen key as that tool's pattern_key argument. Skip it for clearly one-off lessons. It never writes to the database — it only advises.",
+      "Before recording a recurring lesson, suggest which existing pattern_key to reuse (or propose a fresh one) so that the frequency counter actually aggregates instead of splitting one lesson across two near-duplicate keys. Read-only: it queries the project's stored lessons, scores every existing pattern_key by trigram (character-3-gram) Jaccard similarity against your title+description, and returns up to 3 matches above the 0.3 threshold — each with its similarity score, current frequency, and an example title. If nothing clears the threshold it returns a single proposed new key (a boring, hyphenated slug of the title, max 5 words). Call this immediately before amplify_learn_from_mistake whenever the mistake is a recurring pattern you suspect a previous session may have already coined a key for; then pass the chosen key as that tool's pattern_key argument. Skip it for clearly one-off lessons. It never writes to the database — it only advises.",
     inputSchema: {
       type: "object",
       properties: {
@@ -533,7 +545,7 @@ export const TOOLS = [
   {
     name: "amplify_audit_freshness",
     description:
-      "v1.5.0 — Audits a project for unrecorded work by listing memory/<YYYY-MM-DD>.md files whose mtime is newer than the project's latest Amplifier write, so sessions that did real work but never called amplify_learn/amplify_decisions can be caught and triaged retroactively. Compares each dated memory file's mtime against MAX(updated_at) across the project's lessons and decisions; files newer than that cutoff are 'stale'. Read-only — it scans the filesystem and queries the DB but writes nothing. Returns a human-readable report: stale files oldest-first with date, size in KB, and mtime, plus a next-step prompt; or '✓ all fresh', or a 'memory directory not found' note. Edge case: if the project has no Amplifier writes yet, ALL dated memory files are surfaced as candidates (potentially weeks of backlog on first run). Use it when amplify_bootstrap surfaces a stale-memory warning (this tool dumps the full list the warning truncates), or when you suspect a previous session worked without recording; for each flagged day, open the file and follow up with amplify_promote_from_memory_md (to draft suggestions), then amplify_learn / amplify_track_decision to persist.",
+      "Audits a project for unrecorded work by listing memory/<YYYY-MM-DD>.md files whose mtime is newer than the project's latest Amplifier write, so sessions that did real work but never called amplify_learn/amplify_decisions can be caught and triaged retroactively. Compares each dated memory file's mtime against MAX(updated_at) across the project's lessons and decisions; files newer than that cutoff are 'stale'. Read-only — it scans the filesystem and queries the DB but writes nothing. Returns a human-readable report: stale files oldest-first with date, size in KB, and mtime, plus a next-step prompt; or '✓ all fresh', or a 'memory directory not found' note. Edge case: if the project has no Amplifier writes yet, ALL dated memory files are surfaced as candidates (potentially weeks of backlog on first run). Use it when amplify_bootstrap surfaces a stale-memory warning (this tool dumps the full list the warning truncates), or when you suspect a previous session worked without recording; for each flagged day, open the file and follow up with amplify_promote_from_memory_md (to draft suggestions), then amplify_learn / amplify_track_decision to persist.",
     inputSchema: {
       type: "object",
       properties: {
