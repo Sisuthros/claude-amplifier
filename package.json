@@ -31,7 +31,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "claude-amplifier": "./dist/index.js"
+    "claude-amplifier": "dist/index.js"
   },
   "files": [
     "dist",
