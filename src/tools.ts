@@ -25,6 +25,11 @@ import {
   validateStringArray,
   validateRelations,
 } from "./validation.js";
+import {
+  similarity,
+  tsOf,
+  isoOf,
+} from "./auto-capture-helpers.js";
 
 /**
  * P1 #7 — run a validation block and convert a thrown {@link ValidationError}
@@ -1210,5 +1215,318 @@ export async function handleEvidenceChain(
   }
 
   return lines.join("\n");
+}
+
+// ===========================================================================
+// v1.6.0 — Auto-capture tools
+//
+// Ported from the chimera-prime fork's src/handlers/auto-capture.ts (Clasu,
+// 2026-05-25). Ville's brief: "Tämä pitäisi tapahtua automaattisesti. Ei
+// kerjäämällä." — make capturing lessons cheap enough that Claude does it
+// without being nagged.
+//
+// Adaptation notes for the master port:
+//   - Handlers take (store, args) and return a bare string (the router wraps
+//     it), instead of the fork's HandlerContext / HandlerResult envelope.
+//   - Storage access is store.getAllLessonsForProject(project) (the fork used
+//     ctx.store.getLessons({ project })).
+//   - master's Lesson.id is a NUMBER (the fork assumed a string id), so any
+//     id slicing uses String(l.id).
+//   - master's Lesson has NO `category` column — the fork's category filter
+//     lived only in suggest_pattern_key, which master already ships, so it is
+//     not ported here.
+//   - Structured output is returned as JSON.stringify(payload, null, 2) so the
+//     shape stays machine-readable (mirrors the fork's textResponse(obj)).
+// ===========================================================================
+
+/**
+ * amplify_capture_session — scan a recent transcript for learning triggers
+ * (frustration, "this is important", success, prohibitions, forward-looking
+ * decisions) and return GUIDANCE on what to capture. Pure text analysis — it
+ * does NOT touch the database and saves nothing. Claude still owns the judgment
+ * call about which suggestions deserve an amplify_learn / amplify_track_decision
+ * follow-up.
+ */
+export async function handleCaptureSession(
+  _store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const validated = withValidation(() => ({
+    project: validateRequiredString(args.project, "project"),
+    recent_messages: validateRequiredString(args.recent_messages, "recent_messages"),
+  }));
+  if (typeof validated === "string") return validated;
+  const { project, recent_messages } = validated;
+
+  const triggers_found = Array.isArray(args.triggers_found)
+    ? (args.triggers_found as unknown[]).map(String)
+    : [];
+
+  // Trigger table. Fresh RegExp instances per call so the case-insensitive
+  // flag never carries lastIndex state across invocations.
+  //
+  // PORT NOTE: the fork used ASCII `\b...\b` boundaries, but JS `\b` is
+  // defined over ASCII `\w` only — so Finnish trigger words that begin or end
+  // on ä/ö (ärsyttävää, tärkeää, älä koskaan, älä unohda, ylpeä) NEVER matched
+  // in the fork, silently defeating the "Finnish+English" promise. We use
+  // Unicode-aware boundaries `(?<![\p{L}\p{N}_])…(?![\p{L}\p{N}_])` with the
+  // `u` flag so Finnish and English both match while still respecting word
+  // boundaries (e.g. "importantly" does not trigger "important").
+  const B = (alt: string): RegExp =>
+    new RegExp(`(?<![\\p{L}\\p{N}_])(${alt})(?![\\p{L}\\p{N}_])`, "iu");
+  const triggers: Array<{ pattern: RegExp; type: string; severity: string }> = [
+    { pattern: B("ärsyttävää|jankutat|olet tehnyt tämän jo|annoying|frustrating"), type: "mistake", severity: "high" },
+    { pattern: B("älä unohda|don't forget|tärkeää|important|opin tämän"), type: "insight", severity: "high" },
+    { pattern: B("hieno|perfect|toimii|works|ylpeä|proud|hieno hetki"), type: "success", severity: "medium" },
+    { pattern: B("älä koskaan|never do|kielletty|forbidden"), type: "mistake", severity: "critical" },
+    { pattern: B("tästä eteenpäin|from now on|going forward|jatkossa"), type: "decision", severity: "medium" },
+  ];
+
+  const detected: Array<{ trigger: string; type: string; severity: string; context_snippet: string }> = [];
+  for (const t of triggers) {
+    const match = recent_messages.match(t.pattern);
+    if (match && match.index !== undefined) {
+      const start = Math.max(0, match.index - 80);
+      const end = Math.min(recent_messages.length, match.index + 120);
+      detected.push({
+        trigger: match[0],
+        type: t.type,
+        severity: t.severity,
+        context_snippet: recent_messages.slice(start, end).replace(/\n+/g, " "),
+      });
+    }
+  }
+
+  // Caller-flagged triggers always count as user-flagged / high.
+  for (const flag of triggers_found) {
+    detected.push({ trigger: flag, type: "user-flagged", severity: "high", context_snippet: "(user flagged)" });
+  }
+
+  const suggestions = detected.slice(0, 5).map((d, i) => ({
+    suggested_action: "Call amplify_learn (or amplify_record_claim) / amplify_decisions",
+    suggested_type: d.type,
+    suggested_severity: d.severity,
+    extracted_from_trigger: d.trigger,
+    context: d.context_snippet,
+    next_step:
+      i === 0
+        ? "Before recording: call amplify_suggest_pattern_key with the proposed title to find existing pattern_keys."
+        : "Repeat dedup + pattern_key check for this one too.",
+  }));
+
+  return JSON.stringify(
+    {
+      project,
+      triggers_detected: detected.length,
+      suggestions,
+      summary:
+        detected.length === 0
+          ? "No learning triggers found in recent messages. Nothing to capture."
+          : `Found ${detected.length} learning trigger(s). Review each, then record with dedup-check first.`,
+      workflow: [
+        "1. For each suggestion, draft a title + description.",
+        "2. Call amplify_suggest_pattern_key with title.",
+        "3. Use returned pattern_key (existing or new).",
+        "4. Call amplify_learn (or amplify_record_claim) with full payload.",
+      ],
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * amplify_dedup_check — before writing a new lesson, find near-duplicates so a
+ * frequency-bump lands on the right existing row instead of fragmenting the
+ * pattern. Read-only: scores '<title> <description>' against every lesson in
+ * the project via word-token Jaccard and returns the top 5 above `threshold`.
+ */
+export async function handleDedupCheck(
+  store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const validated = withValidation(() => ({
+    title: validateRequiredString(args.title, "title"),
+  }));
+  if (typeof validated === "string") return validated;
+  const { title } = validated;
+
+  const project = typeof args.project === "string" ? args.project : undefined;
+  const description = typeof args.description === "string" ? args.description : "";
+  const threshold = typeof args.threshold === "number" ? args.threshold : 0.5;
+
+  const lessons = store.getAllLessonsForProject(project ?? "");
+  const probe = `${title} ${description}`;
+
+  const duplicates = lessons
+    .map((l) => ({
+      id: l.id,
+      title: l.title,
+      pattern_key: l.pattern_key,
+      frequency: l.frequency ?? 1,
+      type: l.type,
+      similarity: Math.round(similarity(probe, `${l.title} ${l.description ?? ""}`) * 100) / 100,
+    }))
+    .filter((m) => m.similarity >= threshold)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, 5);
+
+  const is_likely_duplicate = duplicates.length > 0 && duplicates[0].similarity >= 0.7;
+
+  return JSON.stringify(
+    {
+      is_likely_duplicate,
+      duplicates,
+      recommendation:
+        duplicates.length === 0
+          ? "No duplicates found. Safe to record as new lesson."
+          : is_likely_duplicate
+            ? `Strong duplicate match: '${duplicates[0].title}' (similarity ${duplicates[0].similarity}). Consider using pattern_key '${duplicates[0].pattern_key ?? "(none)"}' to increment frequency instead of creating a new entry.`
+            : "Weak matches only. Likely safe to record as new lesson, but consider using pattern_key for grouping.",
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * amplify_recent_patterns — list the most-active pattern_keys in the last N
+ * days, grouped and summed, so you can see what keeps biting you. Read-only.
+ */
+export async function handleRecentPatterns(
+  store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const project = typeof args.project === "string" ? args.project : undefined;
+  const days = typeof args.days === "number" && args.days > 0 ? Math.floor(args.days) : 7;
+  const limitRaw = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 10;
+  const limit = Math.min(limitRaw, 50);
+
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const lessons = store.getAllLessonsForProject(project ?? "");
+
+  const recent = lessons.filter((l) => tsOf(l.updated_at ?? l.created_at) >= cutoff);
+
+  const byKey = new Map<
+    string,
+    {
+      pattern_key: string;
+      total_frequency: number;
+      lesson_count: number;
+      sample_title: string;
+      latest_update: string;
+      latest_ms: number;
+      types: Set<string>;
+    }
+  >();
+
+  for (const l of recent) {
+    const key = l.pattern_key ?? `(no-key: ${String(l.id).slice(0, 8)})`;
+    const entry =
+      byKey.get(key) ??
+      {
+        pattern_key: key,
+        total_frequency: 0,
+        lesson_count: 0,
+        sample_title: l.title,
+        latest_update: isoOf(l.updated_at ?? l.created_at),
+        latest_ms: tsOf(l.updated_at ?? l.created_at),
+        types: new Set<string>(),
+      };
+    entry.total_frequency += l.frequency ?? 1;
+    entry.lesson_count += 1;
+    entry.types.add(l.type);
+    const lms = tsOf(l.updated_at ?? l.created_at);
+    if (lms > entry.latest_ms) {
+      entry.latest_ms = lms;
+      entry.latest_update = isoOf(l.updated_at ?? l.created_at);
+      entry.sample_title = l.title;
+    }
+    byKey.set(key, entry);
+  }
+
+  const top_patterns = [...byKey.values()]
+    .sort((a, b) => b.total_frequency - a.total_frequency)
+    .slice(0, limit)
+    .map((e) => ({ ...e, types: [...e.types] }));
+
+  return JSON.stringify(
+    {
+      window_days: days,
+      total_recent_lessons: recent.length,
+      top_patterns,
+      insight:
+        top_patterns.length > 0
+          ? `Top pattern: '${top_patterns[0].pattern_key}' (frequency ${top_patterns[0].total_frequency}, ${top_patterns[0].lesson_count} lessons). Consider whether this needs a mechanical fix vs. another rule.`
+          : "No recurring patterns in the recent window.",
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * amplify_decay_old — report which lessons have gone cold (stale, low-frequency,
+ * non-critical) and could be decayed/archived. REPORT-ONLY: performs no write
+ * even when dry_run=false — cold-marking needs a future 'cold_at' column +
+ * storage UPDATE. The output is a recommendation, not a mutation.
+ */
+export async function handleDecayOld(
+  store: SQLiteStore,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const project = typeof args.project === "string" ? args.project : undefined;
+  const cold_threshold_days =
+    typeof args.cold_threshold_days === "number" && args.cold_threshold_days > 0
+      ? Math.floor(args.cold_threshold_days)
+      : 60;
+  const min_frequency_to_keep_warm =
+    typeof args.min_frequency_to_keep_warm === "number" && args.min_frequency_to_keep_warm > 0
+      ? Math.floor(args.min_frequency_to_keep_warm)
+      : 3;
+  const dry_run = typeof args.dry_run === "boolean" ? args.dry_run : true;
+
+  const cutoff = Date.now() - cold_threshold_days * 24 * 60 * 60 * 1000;
+  const lessons = store.getAllLessonsForProject(project ?? "");
+
+  const cold: Array<{
+    id: number;
+    title: string;
+    pattern_key: string | undefined;
+    frequency: number;
+    last_seen: string;
+    age_days: number;
+  }> = [];
+
+  for (const l of lessons) {
+    const lastSeenMs = tsOf(l.updated_at ?? l.created_at);
+    if (lastSeenMs >= cutoff) continue; // still warm
+    if ((l.frequency ?? 1) >= min_frequency_to_keep_warm) continue; // frequent → keep warm
+    if (l.severity === "critical") continue; // critical lessons never decay
+    const age_days = Math.round((Date.now() - lastSeenMs) / (24 * 60 * 60 * 1000));
+    cold.push({
+      id: l.id,
+      title: l.title,
+      pattern_key: l.pattern_key,
+      frequency: l.frequency ?? 1,
+      last_seen: isoOf(l.updated_at ?? l.created_at),
+      age_days,
+    });
+  }
+
+  return JSON.stringify(
+    {
+      dry_run,
+      cold_threshold_days,
+      min_frequency_to_keep_warm,
+      would_mark_cold_count: cold.length,
+      sample: cold.slice(0, 10),
+      note: dry_run
+        ? "Dry run only. No changes made. NOTE: this build is report-only — even dry_run=false writes nothing (cold-marking needs a cold_at column + UPDATE in storage, a v2 follow-up)."
+        : "Report-only build: cold-marking write is NOT implemented — nothing was modified. Add a cold_at column + storage UPDATE to enable actual marking.",
+    },
+    null,
+    2,
+  );
 }
 

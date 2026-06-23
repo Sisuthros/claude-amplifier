@@ -27,7 +27,11 @@ const REQUIRED_SKILLS = [
 
 /** Pull the `key: value` out of a leading `---` YAML frontmatter block. */
 function parseFrontmatter(md) {
-  const m = md.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
+  // Normalize line endings so the parser is robust regardless of the
+  // checkout's autocrlf setting (CRLF on Windows, LF on CI/Linux). A stray
+  // \r at end-of-line would otherwise break the value regex below.
+  const text = md.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
   if (!m) return null;
   const fm = {};
   for (const line of m[1].split("\n")) {

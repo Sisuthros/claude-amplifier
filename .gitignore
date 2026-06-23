@@ -33,3 +33,6 @@ knowledge/*
 
 # local registry-publisher binary + auth artifacts (never commit)
 .tools/
+
+# prebuilt npm tarballs from `npm pack` (build artifact, never commit)
+claude-amplifier-*.tgz
