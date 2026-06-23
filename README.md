@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/node/v/claude-amplifier.svg)](https://www.npmjs.com/package/claude-amplifier)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io)
+[![claude-amplifier MCP server](https://glama.ai/mcp/servers/Sisuthros/claude-amplifier/badges/score.svg)](https://glama.ai/mcp/servers/Sisuthros/claude-amplifier)
 
 > Persistent memory for Claude that doesn't lie to itself.<br>
 > Write-verification, stale-memory detection, Pattern Oracle, verification-gated lessons —
